@@ -1,0 +1,388 @@
+:root {
+  font-family:
+    "Sarabun", "Noto Sans Thai", -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #e6e6e6;
+  background-color: #1b1b1f;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+}
+
+/* The `hidden` attribute must always win — a class like `.models-banner
+   { display: flex }` has equal specificity to the UA's `[hidden]` rule and,
+   coming later, would override it, leaving toggled-off elements permanently
+   visible (FIXES.md #17). */
+[hidden] {
+  display: none !important;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 1rem;
+  background-color: #232329;
+  border-bottom: 1px solid #333;
+}
+
+.cut-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid #3a3a44;
+}
+
+.cut-count {
+  font-size: 0.8rem;
+  color: #f0883e;
+}
+
+#testcut-btn.active {
+  background-color: #7a2f2a;
+  border-color: #f85149;
+}
+
+.cancel-btn {
+  background-color: #7a2f2a !important;
+  border-color: #f85149 !important;
+}
+
+.toolbar button {
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: #e6e6e6;
+  background-color: #35353d;
+  border: 1px solid #4a4a55;
+  border-radius: 6px;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  background-color: #44444e;
+}
+
+.toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  color: #b8b8c2;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.zoom-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #b8b8c2;
+}
+
+.models-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background-color: #3d2f14;
+  border-bottom: 1px solid #c9a227;
+  color: #e8c96a;
+  font-size: 0.88rem;
+}
+
+.models-banner button {
+  flex-shrink: 0;
+  font-family: inherit;
+  color: #1b1b1f;
+  background-color: #c9a227;
+  border: none;
+  border-radius: 6px;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid #29292f;
+}
+
+.dirty-dot {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: #c9a227;
+}
+
+.file-name {
+  font-size: 0.85rem;
+  color: #9a9aa5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.waves-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+.spectrogram {
+  display: block;
+  width: 100%;
+  height: 190px;
+  background-color: #101014;
+}
+
+.fine-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 1rem;
+  background-color: #232329;
+  border-top: 1px solid #333;
+  font-size: 0.82rem;
+  color: #b8b8c2;
+}
+
+.fine-bar b {
+  font-variant-numeric: tabular-nums;
+  color: #e6e6e6;
+}
+
+.fine-bar button {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  color: #e6e6e6;
+  background-color: #35353d;
+  border: 1px solid #4a4a55;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.fine-label {
+  color: #8ab4f8;
+}
+
+.transcript-panel {
+  display: flex;
+  flex-direction: column;
+  height: 30%;
+  min-height: 140px;
+  border-top: 1px solid #333;
+  background-color: #1f1f24;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 1rem;
+  font-size: 0.85rem;
+  color: #b8b8c2;
+  border-bottom: 1px solid #29292f;
+}
+
+.rough-note {
+  color: #c9a227;
+  font-size: 0.78rem;
+}
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+  font-size: 1.05rem;
+  line-height: 2;
+  color: #d8d8de;
+}
+
+.segment {
+  padding: 0.1rem 0;
+}
+
+.segment-edit {
+  background: none;
+  border: none;
+  color: #8ab4f8;
+  cursor: pointer;
+  font-size: 0.85rem;
+  opacity: 0.3;
+  padding: 0 0.35rem 0 0;
+}
+
+.segment:hover .segment-edit {
+  opacity: 1;
+}
+
+.segment-input {
+  width: 100%;
+  min-height: 3.2rem;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.7;
+  color: #e6e6e6;
+  background-color: #2a2a31;
+  border: 1px solid #4a90d9;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  resize: vertical;
+}
+
+.review-count {
+  color: #f0883e;
+  font-size: 0.78rem;
+}
+
+.token {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.05rem 0.05rem;
+}
+
+.token:hover {
+  background-color: #3a4a5e;
+}
+
+.token-filler {
+  background-color: rgba(201, 162, 39, 0.25);
+  border-bottom: 1px dashed #c9a227;
+}
+
+.token-active {
+  background-color: #2f5b8f;
+  color: #ffffff;
+}
+
+.token-low-conf {
+  border-bottom: 2px dotted #f85149;
+}
+
+.token-edited {
+  border-bottom: 2px solid #3fb950;
+}
+
+.token-excluded {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.token-cut {
+  color: #f85149;
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+
+.token-selected {
+  background-color: rgba(80, 140, 255, 0.35);
+  outline: 1px solid rgba(80, 140, 255, 0.7);
+}
+
+.transcript {
+  user-select: none;
+}
+
+.search-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.search-group input {
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #e6e6e6;
+  background-color: #2a2a31;
+  border: 1px solid #4a4a55;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  width: 13rem;
+}
+
+.search-group input:disabled {
+  opacity: 0.45;
+}
+
+.search-count {
+  font-size: 0.8rem;
+  color: #9a9aa5;
+  min-width: 3.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-search {
+  background-color: rgba(155, 105, 220, 0.3);
+}
+
+.token-search-current {
+  background-color: #7a4dbb;
+  color: #ffffff;
+}
+
+.token-input {
+  font-family: inherit;
+  font-size: inherit;
+  color: #e6e6e6;
+  background-color: #2a2a31;
+  border: 1px solid #4a90d9;
+  border-radius: 4px;
+  padding: 0 0.15rem;
+}
+
+.align-ok {
+  color: #3fb950;
+  font-size: 0.78rem;
+}
+
+.statusbar {
+  padding: 0.3rem 1rem;
+  background-color: #232329;
+  border-top: 1px solid #333;
+  font-size: 0.8rem;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #b8b8c2;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-checking .dot {
+  background-color: #c9a227;
+}
+
+.status-ok .dot {
+  background-color: #3fb950;
+}
+
+.status-down .dot {
+  background-color: #f85149;
+}

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thai Audio Text-Editor</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="app">
+      <header class="toolbar">
+        <button id="new-btn" title="เริ่มงานใหม่ (ล้างงานปัจจุบัน)">งานใหม่</button>
+        <button id="open-btn">เปิดไฟล์เสียง</button>
+        <button id="play-btn" disabled>เล่น</button>
+        <button id="transcribe-btn" disabled>ถอดเสียง (ฉบับร่าง)</button>
+        <button id="align-script-btn" disabled title="มีบทอยู่แล้ว: เลือกไฟล์บท .txt/.docx แล้วตรึงเข้ากับเสียงโดยไม่ต้องถอด">ตรึงบท (มีบทแล้ว)</button>
+        <button id="hide-fillers-btn" disabled title="ทำเครื่องหมายคำ อ่า/อืม/เอ่อ ทั้งหมดเป็นไม่ใช่เนื้อหา (เสียงยังอยู่)">ซ่อน filler</button>
+        <button id="save-btn" disabled title="บันทึกโปรเจกต์ (Cmd/Ctrl+S)">บันทึก</button>
+        <button id="save-as-btn" disabled title="บันทึกเป็นไฟล์ใหม่ โดยไม่ทับไฟล์เดิม">บันทึกเป็น</button>
+        <button id="export-btn" disabled title="Render เสียงตามการตัด (WAV + crossfade) และ .docx เนื้อหาที่แก้แล้ว — ต้นฉบับไม่ถูกแตะ">Export</button>
+        <button id="cancel-job-btn" class="cancel-btn" hidden title="หยุดงานที่กำลังทำ (ถอด/ตรึง/export)">ยกเลิกงาน ✕</button>
+        <span class="cut-group">
+          <button id="cut-btn" disabled title="ตัดช่วงคำที่เลือก (Delete) — บันทึกลง EDL ไม่แตะไฟล์ต้นฉบับ">✂ ตัดช่วงที่เลือก</button>
+          <button id="play-sel-btn" disabled title="เล่นเฉพาะช่วงที่เลือกแล้วหยุด (Shift+Space)">ฟังช่วงที่เลือก</button>
+          <button id="testcut-btn" disabled title="ปกติแอปเล่นข้ามส่วนที่ตัดเสมอ — กดปุ่มนี้เพื่อฟังต้นฉบับเต็มชั่วคราว (ต้นฉบับไม่เคยถูกแก้)">ฟังต้นฉบับ</button>
+          <button id="undo-btn" disabled title="ย้อนการตัด (Cmd/Ctrl+Z)">↺</button>
+          <button id="redo-btn" disabled title="ทำซ้ำ (Cmd/Ctrl+Shift+Z)">↻</button>
+          <span id="cut-count" class="cut-count"></span>
+        </span>
+        <span class="search-group">
+          <input id="search-input" type="search" placeholder="ค้นหาคำ… (Cmd/Ctrl+F)" disabled />
+          <button id="search-prev" disabled title="ก่อนหน้า">‹</button>
+          <button id="search-next" disabled title="ถัดไป (Enter)">›</button>
+          <span id="search-count" class="search-count"></span>
+        </span>
+        <span id="time-display" class="time">0:00.0 / 0:00.0</span>
+        <span class="spacer"></span>
+        <label class="zoom-label">
+          ซูม
+          <input id="zoom-slider" type="range" min="0" max="100" value="0" disabled />
+        </label>
+      </header>
+
+      <div id="models-banner" class="models-banner" hidden>
+        <span id="models-banner-text">
+          ยังไม่มีโมเดล AI ในเครื่องนี้ — ดาวน์โหลดครั้งเดียว (~4.4GB) เพื่อใช้ถอดเสียง/ตรึงบท
+          (เปิดโปรเจกต์ ตัด และ export ใช้ได้เลยโดยไม่ต้องมีโมเดล)
+        </span>
+        <button id="download-models-btn">ติดตั้งโมเดล</button>
+      </div>
+
+      <div class="file-row">
+        <span id="dirty-dot" class="dirty-dot" hidden>● ยังไม่บันทึก</span>
+        <div id="file-name" class="file-name">ยังไม่ได้เปิดไฟล์ — กด "เปิดไฟล์เสียง" เพื่อเริ่ม (เปิดไฟล์ .audioedit.json ได้ด้วย)</div>
+      </div>
+
+      <div class="waves-scroll">
+        <div id="waves"></div>
+        <canvas id="spectrogram" class="spectrogram"></canvas>
+      </div>
+
+      <div id="fine-bar" class="fine-bar" hidden>
+        <span class="fine-label">เก็บละเอียดขอบตัด:</span>
+        <span>เริ่ม <b id="fine-start"></b></span>
+        <button data-edge="start" data-delta="-0.01">-10ms</button>
+        <button data-edge="start" data-delta="-0.001">-1ms</button>
+        <button data-edge="start" data-delta="0.001">+1ms</button>
+        <button data-edge="start" data-delta="0.01">+10ms</button>
+        <span>จบ <b id="fine-end"></b></span>
+        <button data-edge="end" data-delta="-0.01">-10ms</button>
+        <button data-edge="end" data-delta="-0.001">-1ms</button>
+        <button data-edge="end" data-delta="0.001">+1ms</button>
+        <button data-edge="end" data-delta="0.01">+10ms</button>
+      </div>
+
+      <section class="transcript-panel">
+        <div class="transcript-header">
+          <span>Transcript ฉบับร่าง</span>
+          <span id="review-count" class="review-count" title="กด Tab เพื่อไล่ตรวจคำที่ระบบไม่มั่นใจทีละคำ"></span>
+          <span id="align-note" class="rough-note"></span>
+        </div>
+        <div id="transcript" class="transcript">
+          ยังไม่มี transcript — เปิดไฟล์เสียงแล้วกด "ถอดเสียง (ฉบับร่าง)"
+          หรือเปิดไฟล์โปรเจกต์ .audioedit.json ที่เคยบันทึกไว้
+          (คลิกคำ = เลือก, Space = เล่น/หยุด, ลาก/Shift+คลิก = เลือกหลายคำ,
+          Delete = ตัด, Enter หรือดับเบิลคลิก = แก้สะกด, คลิกขวา = ไม่ใช่เนื้อหา)
+        </div>
+      </section>
+
+      <footer class="statusbar">
+        <span id="backend-status" class="status status-checking">
+          <span class="dot"></span>
+          <span id="backend-status-text">กำลังตรวจสอบ backend…</span>
+        </span>
+      </footer>
+    </main>
+  </body>
+</html>

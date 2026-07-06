@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-debug",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "1421", "--strictPort"],
+      "port": 1421,
+      "autoPort": false
+    }
+  ]
+}
