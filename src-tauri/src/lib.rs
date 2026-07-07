@@ -26,11 +26,19 @@ fn spawn_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir).ok();
 
-    let child = std::process::Command::new(&backend)
-        .arg("--port")
+    let mut cmd = std::process::Command::new(&backend);
+    cmd.arg("--port")
         .arg("8756")
-        .env("AUDIOEDIT_DATA_DIR", &data_dir)
-        .spawn()?;
+        .env("AUDIOEDIT_DATA_DIR", &data_dir);
+    // Belt-and-suspenders with the windowless PyInstaller build: never let a
+    // console window flash when the sidecar starts on Windows.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = cmd.spawn()?;
     app.manage(BackendChild(std::sync::Mutex::new(Some(child))));
     Ok(())
 }

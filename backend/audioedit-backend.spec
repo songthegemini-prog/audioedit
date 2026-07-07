@@ -43,6 +43,8 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="audioedit-backend",
-    console=True,
+    # windowless: no black console window pops up on Windows when the Tauri
+    # app spawns the sidecar (works the same on macOS)
+    console=False,
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="audioedit-backend")
