@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .align import CTCAligner, SegmentWords
@@ -73,6 +74,109 @@ def download_models(store: JobStore = Depends(get_job_store)) -> dict[str, str]:
     """First-run installer: download both models (~4.4GB, setup-time only)."""
     job = store.submit_download_models()
     return {"job_id": job.id}
+
+
+# --- long-file mode (Phase 9): canonical cache WAV + peaks + PCM windows ---
+
+
+@app.get("/audio_info")
+def audio_info(path: str) -> dict:
+    """Fast metadata probe (no decode) — the frontend picks short/long mode."""
+    from . import longfile
+
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {p}")
+    return longfile.probe(p)
+
+
+class PrepareRequest(BaseModel):
+    path: str
+
+
+@app.post("/prepare_audio")
+def prepare_audio(
+    req: PrepareRequest, store: JobStore = Depends(get_job_store)
+) -> dict[str, str]:
+    """Long-file mode: stream-transcode to the canonical WAV (job)."""
+    path = Path(req.path).expanduser()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    job = store.submit_prepare(path)
+    return {"job_id": job.id}
+
+
+@app.get("/audio_file")
+def audio_file(path: str, request: Request) -> Response:
+    """Serve the canonical WAV with HTTP Range so the media element can
+    stream + seek without the frontend ever holding the file in memory."""
+    from . import longfile
+
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {p}")
+    wav = longfile.wav_path_for(p)
+    if not wav.exists():
+        raise HTTPException(status_code=404, detail="not prepared — call /prepare_audio")
+    size = wav.stat().st_size
+    rng = longfile.parse_range(request.headers.get("range"), size)
+    headers = {"Accept-Ranges": "bytes"}
+
+    def stream(start: int, end: int):  # inclusive end
+        with wav.open("rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                block = f.read(min(1 << 20, remaining))
+                if not block:
+                    break
+                remaining -= len(block)
+                yield block
+
+    if rng is None:
+        headers["Content-Length"] = str(size)
+        return StreamingResponse(
+            stream(0, size - 1), media_type="audio/wav", headers=headers
+        )
+    start, end = rng
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(end - start + 1)
+    return StreamingResponse(
+        stream(start, end), status_code=206, media_type="audio/wav", headers=headers
+    )
+
+
+@app.get("/peaks")
+def peaks(path: str) -> Response:
+    """Precomputed min/max pairs (float32) for drawing the waveform."""
+    from . import longfile
+
+    p = Path(path).expanduser()
+    try:
+        data = longfile.read_peaks(p)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not prepared — call /prepare_audio")
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.get("/pcm")
+def pcm(path: str, start: float, end: float) -> Response:
+    """Float32 mono window from the canonical WAV — feeds spectrogram/snap.
+    Read straight from the same bytes the media element plays (same-PCM)."""
+    from . import longfile
+
+    p = Path(path).expanduser()
+    try:
+        data, rate = longfile.read_pcm_window(p, start, end)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not prepared — call /prepare_audio")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(rate)},
+    )
 
 
 @app.post("/transcribe")

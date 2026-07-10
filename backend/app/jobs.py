@@ -32,7 +32,7 @@ class JobCancelled(Exception):
 class Job:
     id: str
     path: Path
-    kind: str = "transcribe"  # "transcribe" | "align_script" | "export"
+    kind: str = "transcribe"  # "transcribe" | "align_script" | "export" | "prepare"
     script_path: Path | None = None
     out_path: Path | None = None
     edl: list[tuple[float, float]] | None = None
@@ -88,6 +88,10 @@ class JobStore:
     def submit_download_models(self) -> Job:
         return self._submit(Job(id=uuid.uuid4().hex, path=Path("."), kind="download_models"))
 
+    def submit_prepare(self, path: Path) -> Job:
+        """Long-file mode: transcode to the canonical cache WAV + peaks."""
+        return self._submit(Job(id=uuid.uuid4().hex, path=path, kind="prepare"))
+
     def cancel(self, job_id: str) -> bool:
         job = self.get(job_id)
         if job is None or job.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED):
@@ -114,6 +118,8 @@ class JobStore:
                     self._run_align_script(job)
                 elif job.kind == "export":
                     self._run_export(job)
+                elif job.kind == "prepare":
+                    self._run_prepare(job)
                 elif job.kind == "download_models":
                     self._run_download_models(job)
                 else:
@@ -142,6 +148,19 @@ class JobStore:
             job.edl,
             on_progress=on_progress,
             check_cancelled=job.check_cancelled,
+        )
+        job.progress = 1.0
+        job.status = JobStatus.DONE
+
+    def _run_prepare(self, job: Job) -> None:
+        """Transcode to the canonical WAV + peaks (idempotent, streaming)."""
+        from .longfile import prepare  # numpy/av import kept lazy
+
+        def on_progress(frac: float) -> None:
+            job.progress = frac
+
+        job.result = prepare(
+            job.path, on_progress=on_progress, check_cancelled=job.check_cancelled
         )
         job.progress = 1.0
         job.status = JobStatus.DONE
