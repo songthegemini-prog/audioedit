@@ -741,9 +741,60 @@ function setup(): void {
   });
 
   // --- export: render EDL to a new WAV (+ optional matching .docx) ---
+  // Save the edited script (.docx or .txt) — shared by both export paths.
+  const exportScript = async (proj: Project, base: string): Promise<string | null> => {
+    const scriptOut = await save({
+      defaultPath: `${base}-edited.docx`,
+      filters: [
+        { name: "Word", extensions: ["docx"] },
+        { name: "Text", extensions: ["txt"] },
+      ],
+    });
+    if (!scriptOut) return null;
+    if (scriptOut.toLowerCase().endsWith(".txt")) {
+      await writeTextFile(scriptOut, proj.exportLines().join("\n"));
+    } else {
+      await exportDocx(scriptOut, proj.exportLines());
+    }
+    return scriptOut;
+  };
+
+  // "จะ export อะไรบ้าง?" — native <dialog>, resolves both/doc/cancel
+  const exportDialog = el<HTMLDialogElement>("#export-dialog");
+  const askExportChoice = (): Promise<string> =>
+    new Promise((resolve) => {
+      exportDialog.returnValue = "cancel";
+      const done = () => {
+        exportDialog.removeEventListener("close", done);
+        resolve(exportDialog.returnValue || "cancel");
+      };
+      exportDialog.addEventListener("close", done);
+      exportDialog.showModal();
+    });
+  for (const btn of exportDialog.querySelectorAll("button")) {
+    btn.addEventListener("click", () => exportDialog.close(btn.value));
+  }
+
   exportBtn.addEventListener("click", async () => {
     if (!project) return;
     const proj = project;
+    const base = proj.audioPath.replace(/\.[^.]+$/, "");
+
+    const choice = await askExportChoice();
+    if (choice === "cancel") return;
+
+    if (choice === "doc") {
+      // Doc-only: no audio render, no rough-timestamp warning (text content
+      // doesn't depend on word times — only cut boundaries do).
+      try {
+        const out = await exportScript(proj, base);
+        if (out) fileName.textContent = `✅ Export บทแล้ว: ${out}`;
+      } catch (err) {
+        fileName.textContent = `Export ไม่สำเร็จ: ${String(err)}`;
+      }
+      return;
+    }
+
     if (
       proj.transcription.tokens.length > 0 &&
       proj.transcription.timestamps === "rough" &&
@@ -753,7 +804,6 @@ function setup(): void {
     ) {
       return;
     }
-    const base = proj.audioPath.replace(/\.[^.]+$/, "");
     const wavPath = await save({
       defaultPath: `${base}-edited.wav`,
       filters: [{ name: "WAV", extensions: ["wav"] }],
@@ -769,23 +819,8 @@ function setup(): void {
       trackJob(jobId, exportBtn, "Export", "Export เสียง", fileName, async (result) => {
         const r = result as ExportAudioResult;
         let message = `✅ Export เสียงแล้ว: ${r.out_path} (${formatTime(r.duration)})`;
-        if (window.confirm("Export บทเป็น .docx หรือ .txt ด้วยไหม? (เนื้อหาตรงกับเสียงที่ตัดแล้ว)")) {
-          const scriptOut = await save({
-            defaultPath: `${base}-edited.docx`,
-            filters: [
-              { name: "Word", extensions: ["docx"] },
-              { name: "Text", extensions: ["txt"] },
-            ],
-          });
-          if (scriptOut) {
-            if (scriptOut.toLowerCase().endsWith(".txt")) {
-              await writeTextFile(scriptOut, proj.exportLines().join("\n"));
-            } else {
-              await exportDocx(scriptOut, proj.exportLines());
-            }
-            message += ` + ${scriptOut}`;
-          }
-        }
+        const scriptOut = await exportScript(proj, base);
+        if (scriptOut) message += ` + ${scriptOut}`;
         fileName.textContent = message;
       });
     } catch (err) {

@@ -386,3 +386,38 @@ body {
 .status-down .dot {
   background-color: #f85149;
 }
+
+.export-dialog {
+  background-color: #232329;
+  color: #e8e8ee;
+  border: 1px solid #44444e;
+  border-radius: 8px;
+  padding: 1.2rem 1.4rem;
+}
+
+.export-dialog::backdrop {
+  background-color: rgba(0, 0, 0, 0.55);
+}
+
+.export-dialog p {
+  margin: 0 0 0.9rem;
+  font-weight: 600;
+}
+
+.export-dialog-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.export-dialog-buttons button {
+  background-color: #35353d;
+  color: #e8e8ee;
+  border: 1px solid #44444e;
+  border-radius: 6px;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+
+.export-dialog-buttons button:hover {
+  background-color: #44444e;
+}
