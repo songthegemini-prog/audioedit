@@ -165,6 +165,62 @@ export async function cancelJob(jobId: string): Promise<void> {
   await fetch(`${apiBase()}/jobs/${jobId}`, { method: "DELETE" });
 }
 
+// --- long-file mode (Phase 9): the backend keeps a canonical cache WAV ---
+
+export interface AudioInfo {
+  duration: number | null;
+  sample_rate: number;
+  channels: number;
+  prepared: boolean;
+}
+
+/** Fast metadata probe (no decode) — picks short vs long mode. */
+export async function audioInfo(path: string): Promise<AudioInfo> {
+  const res = await fetch(`${apiBase()}/audio_info?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Long-file mode: stream-transcode to the canonical WAV + peaks (job). */
+export async function startPrepareAudio(path: string): Promise<string> {
+  const res = await fetch(`${apiBase()}/prepare_audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return (await res.json()).job_id;
+}
+
+/** URL the media element streams from (HTTP Range) — never loaded into RAM. */
+export function audioFileUrl(path: string): string {
+  return `${apiBase()}/audio_file?path=${encodeURIComponent(path)}`;
+}
+
+/** Precomputed waveform peaks: interleaved min,max float32 pairs. */
+export async function fetchPeaks(path: string): Promise<Float32Array> {
+  const res = await fetch(`${apiBase()}/peaks?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return new Float32Array(await res.arrayBuffer());
+}
+
+/** Float32 mono window from the canonical WAV (same PCM as playback). */
+export async function fetchPcmWindow(
+  path: string,
+  start: number,
+  end: number,
+): Promise<{ data: Float32Array; sampleRate: number }> {
+  const res = await fetch(
+    `${apiBase()}/pcm?path=${encodeURIComponent(path)}&start=${start}&end=${end}`,
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const sampleRate = Number(res.headers.get("x-sample-rate") ?? 0);
+  return { data: new Float32Array(await res.arrayBuffer()), sampleRate };
+}
+
 /** แก้ทั้งวรรค: re-align edited segment text inside its time range (sync). */
 export async function realign(
   path: string,

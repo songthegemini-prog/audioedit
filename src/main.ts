@@ -2,8 +2,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 import {
+  audioFileUrl,
+  audioInfo,
   cancelJob,
   exportDocx,
+  fetchPcmWindow,
+  fetchPeaks,
   getJob,
   health,
   modelsStatus,
@@ -11,10 +15,13 @@ import {
   startAlignScript,
   startDownloadModels,
   startExportAudio,
+  startPrepareAudio,
   startTranscribe,
 } from "./api";
-import type { ExportAudioResult, TranscribeResult } from "./api";
+import type { AudioInfo, ExportAudioResult, TranscribeResult } from "./api";
 import { AudioPlayer, sliderToPxPerSec } from "./audio/player";
+import { MemorySamples, RemoteSamples, snapWithProvider } from "./audio/samples";
+import type { SampleProvider } from "./audio/samples";
 import { clampCutBounds, snapCutPoint } from "./audio/snap";
 import { SpectrogramView } from "./audio/spectrogram";
 import { Project } from "./project";
@@ -154,9 +161,11 @@ function setup(): void {
         player.pause();
         // Snap NOW so the blue region shows the true cut bounds (covering
         // the sound's head, not just the aligned word start) — FIXES.md #9.
-        const bounds = computeSelectionBounds(sel[0], sel[1]);
-        player.seekTo(bounds.start);
-        setSelectionBounds(bounds);
+        void computeSelectionBounds(sel[0], sel[1]).then((bounds) => {
+          if (selection !== sel) return; // selection moved on while snapping
+          player.seekTo(bounds.start);
+          setSelectionBounds(bounds);
+        });
       } else {
         setSelectionBounds(null);
       }
@@ -166,6 +175,8 @@ function setup(): void {
   // --- cutting (EDL — the source file is never touched) ---
   let selection: [number, number] | null = null;
   let selectionBounds: { start: number; end: number } | null = null;
+  // PCM access for spectrogram/snap — in-memory (short) or remote (long file)
+  let sampleProvider: SampleProvider | null = null;
   // Playback skips cuts by DEFAULT (cut = instantly gone from your ears,
   // exactly what export will produce). Toggle on to hear the original.
   let hearOriginal = false;
@@ -205,12 +216,13 @@ function setup(): void {
   };
 
   /** Auto bounds for a token-range selection: snapped to silence/zero-cross,
-   * clamped so neighbouring words keep their tails. */
-  const computeSelectionBounds = (a: number, b: number) => {
+   * clamped so neighbouring words keep their tails. Async because long-file
+   * mode fetches a small PCM window around each boundary to snap in. */
+  const computeSelectionBounds = async (a: number, b: number) => {
     const tokens = project!.transcription.tokens;
     const [start, end] = clampCutBounds(
-      snapSec(tokens[a].start),
-      snapSec(tokens[b].end),
+      await snapSec(tokens[a].start),
+      await snapSec(tokens[b].end),
       a > 0 ? tokens[a - 1].end : null,
       b < tokens.length - 1 ? tokens[b + 1].start : null,
       player.duration,
@@ -233,10 +245,19 @@ function setup(): void {
     updateDirty();
   };
 
-  /** Snap a boundary to silence/zero-crossing using the decoded samples. */
-  const snapSec = (sec: number): number => {
+  /** Snap a boundary to silence/zero-crossing. Sync path for in-memory
+   * audio; long-file mode snaps inside a fetched window (same PCM). */
+  const snapSec = async (sec: number): Promise<number> => {
     const s = player.samples();
-    return s ? snapCutPoint(s.data, s.sampleRate, sec) : sec;
+    if (s) return snapCutPoint(s.data, s.sampleRate, sec);
+    if (sampleProvider) {
+      try {
+        return await snapWithProvider(sampleProvider, sec);
+      } catch {
+        return sec; // backend hiccup — an unsnapped bound is still usable
+      }
+    }
+    return sec;
   };
 
   const cutSelection = () => {
@@ -349,8 +370,13 @@ function setup(): void {
       zoomSlider.disabled = false;
       updateTime(0);
       refreshButtons();
+      // Short files: wrap the decoded buffer. Long files: loadAudio already
+      // set a RemoteSamples provider before loading — keep it.
       const decoded = player.samples();
-      spectrogram.setAudio(decoded?.data ?? null, decoded?.sampleRate ?? 16000);
+      if (decoded) {
+        sampleProvider = new MemorySamples(decoded.data, decoded.sampleRate);
+      }
+      spectrogram.setProvider(sampleProvider);
     },
     onTime: updateTime,
     onPlayState: (playing) => {
@@ -402,15 +428,57 @@ function setup(): void {
     }
   };
 
+  // Files longer than this use long-file mode: audio streams from the
+  // backend's canonical WAV instead of being decoded into frontend RAM.
+  const LONG_FILE_MIN_SEC = 20 * 60;
+
+  /** Poll a job to completion (prepare_audio runs inside loadAudio, so the
+   * usual fire-and-forget trackJob flow doesn't fit here). */
+  const waitForJob = async (jobId: string, onProgress: (p: number) => void) => {
+    for (;;) {
+      const job = await getJob(jobId);
+      onProgress(job.progress);
+      if (job.status === "done") return;
+      if (job.status === "error") throw new Error(job.error ?? "job failed");
+      if (job.status === "cancelled") throw new Error("ยกเลิกแล้ว");
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  };
+
   // --- open: audio file or .audioedit.json project ---
   const loadAudio = async (path: string): Promise<boolean> => {
     fileName.textContent = "กำลังโหลดและถอดรหัสเสียง…";
     playBtn.disabled = true;
     zoomSlider.disabled = true;
     zoomSlider.value = "0";
+    sampleProvider = null;
     try {
-      const bytes = await readFile(path);
-      await player.loadBlob(new Blob([bytes]));
+      // Ask the backend how long the file is (fast, no decode). If the
+      // backend is unreachable, fall back to the in-memory path unchanged.
+      let info: AudioInfo | null = null;
+      try {
+        info = await audioInfo(path);
+      } catch {
+        info = null;
+      }
+      if (info?.duration && info.duration > LONG_FILE_MIN_SEC) {
+        if (!info.prepared) {
+          fileName.textContent = "ไฟล์ยาว — กำลังเตรียมครั้งแรก (ครั้งเดียวต่อไฟล์)…";
+          await waitForJob(await startPrepareAudio(path), (p) => {
+            fileName.textContent = `ไฟล์ยาว — กำลังเตรียมครั้งแรก… ${Math.round(p * 100)}%`;
+          });
+        }
+        const peaks = await fetchPeaks(path);
+        sampleProvider = new RemoteSamples(
+          (s, e) => fetchPcmWindow(path, s, e),
+          info.sample_rate,
+          info.duration,
+        );
+        await player.loadStream(audioFileUrl(path), peaks, info.duration);
+      } else {
+        const bytes = await readFile(path);
+        await player.loadBlob(new Blob([bytes]));
+      }
       currentPath = path;
       fileName.textContent = path;
       return true;
@@ -535,7 +603,8 @@ function setup(): void {
     selection = null;
     setSelectionBounds(null);
     player.clear();
-    spectrogram.setAudio(null, 16000);
+    sampleProvider = null;
+    spectrogram.setProvider(null);
     spectrogram.setOverlays([], null);
     playBtn.disabled = true;
     zoomSlider.disabled = true;
@@ -849,6 +918,8 @@ function setup(): void {
         }
       ).audioContext?.state,
     time: () => player.currentTime,
+    // long-file mode is pure HTTP (no Tauri fs), so it's testable in a browser
+    loadPath: (path: string) => loadAudio(path),
   };
 
   // --- first-run: AI models installer ---

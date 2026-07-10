@@ -8,6 +8,10 @@ import { pcmToWavBlob } from "./wav";
 export const MIN_PX_PER_SEC = 20;
 // 48000 px/s ≈ one pixel per sample — the sample-level zoom CLAUDE.md requires
 export const MAX_PX_PER_SEC = 48000;
+// Long-file mode: peaks have ~23ms resolution, so deeper waveform zoom shows
+// nothing new (and hour-long canvases get huge) — precision work happens on
+// the spectrogram (real PCM windows) + the ±1ms fine-tune bar.
+export const LONG_MODE_MAX_PX_PER_SEC = 2000;
 
 const CUT_COLOR = "rgba(248, 81, 73, 0.28)";
 const SELECTION_COLOR = "rgba(80, 140, 255, 0.28)";
@@ -46,6 +50,9 @@ export class AudioPlayer {
   private pxPerSec = MIN_PX_PER_SEC;
   private events: AudioPlayerEvents;
   private decoded: AudioBuffer | null = null;
+  // Long-file mode draws from precomputed peaks, which have no sample-level
+  // detail — cap the zoom there (the spectrogram stays exact via /pcm).
+  private maxPxPerSec = MAX_PX_PER_SEC;
 
   constructor(container: HTMLElement, events: AudioPlayerEvents = {}) {
     this.events = events;
@@ -141,6 +148,7 @@ export class AudioPlayer {
     this.loaded = false;
     this.rangeEnd = null;
     this.skipCuts = null;
+    this.maxPxPerSec = MAX_PX_PER_SEC;
     this.regions.clearRegions();
     // Decode ONCE; both the display and the playback wav come from this
     // buffer, so they cannot drift apart (m4a codec-delay class of bugs).
@@ -152,6 +160,28 @@ export class AudioPlayer {
     }
     await this.ws.loadBlob(pcmToWavBlob(this.decoded));
     // reset zoom so it matches the zoom slider (which main resets to 0)
+    this.pxPerSec = MIN_PX_PER_SEC;
+    this.ws.zoom(MIN_PX_PER_SEC);
+  }
+
+  /** Long-file mode: stream from the backend's canonical WAV over HTTP Range.
+   * `peaks` are interleaved min,max pairs computed by the backend from the
+   * SAME file the media element plays — display and playback stay same-PCM
+   * (FIXES #7/#13) while the frontend never holds the audio in memory. */
+  async loadStream(url: string, peaks: Float32Array, duration: number): Promise<void> {
+    this.loaded = false;
+    this.rangeEnd = null;
+    this.skipCuts = null;
+    this.decoded = null;
+    this.maxPxPerSec = LONG_MODE_MAX_PX_PER_SEC;
+    this.regions.clearRegions();
+    // one symmetric display value per bucket — wavesurfer mirrors it
+    const display = new Float32Array(peaks.length / 2);
+    for (let i = 0; i < display.length; i++) {
+      display[i] = Math.max(Math.abs(peaks[2 * i]), Math.abs(peaks[2 * i + 1]));
+    }
+    // peaks + duration provided → wavesurfer skips its own decode entirely
+    await this.ws.load(url, [display], duration);
     this.pxPerSec = MIN_PX_PER_SEC;
     this.ws.zoom(MIN_PX_PER_SEC);
   }
@@ -184,7 +214,7 @@ export class AudioPlayer {
   }
 
   zoom(pxPerSec: number): void {
-    if (this.loaded) this.ws.zoom(pxPerSec);
+    if (this.loaded) this.ws.zoom(Math.min(pxPerSec, this.maxPxPerSec));
   }
 
   private emitViewport(): void {

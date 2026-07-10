@@ -9,6 +9,7 @@
 
 import type { Cut } from "../project";
 import { hannWindow, powerSpectrumDb } from "./fft";
+import type { SampleProvider, SampleWindow } from "./samples";
 
 const F_MIN = 60; // Hz, bottom of the log-frequency axis
 const DB_RANGE = 70; // dynamic range below the loudest visible bin
@@ -81,8 +82,9 @@ type DragTarget =
   | { kind: "sel"; edge: "start" | "end" };
 
 export class SpectrogramView {
-  private samples: Float32Array | null = null;
-  private sampleRate = 16000;
+  private provider: SampleProvider | null = null;
+  private window: SampleWindow | null = null; // covers the viewport (+margin)
+  private fetchGen = 0; // stale async fetches are dropped
   private viewStart = 0;
   private viewEnd = 0;
   private cuts: readonly Cut[] = [];
@@ -107,9 +109,10 @@ export class SpectrogramView {
     canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
   }
 
-  setAudio(samples: Float32Array | null, sampleRate: number): void {
-    this.samples = samples;
-    this.sampleRate = sampleRate;
+  setProvider(provider: SampleProvider | null): void {
+    this.provider = provider;
+    this.window = null;
+    this.fetchGen++;
     this.invalidateBase();
   }
 
@@ -157,16 +160,69 @@ export class SpectrogramView {
     } else {
       ctx.fillStyle = "#101014";
       ctx.fillRect(0, 0, width, height);
+      this.drawHint(ctx, width, height);
     }
     this.drawOverlays(ctx, width, height);
   }
 
-  private computeBase(width: number, height: number): ImageData | null {
-    const samples = this.samples;
+  /** Long-file mode: the base image may be missing because the window is
+   * still loading, or because the viewport is wider than one fetchable
+   * window — tell the user instead of showing a silent black box. */
+  private drawHint(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    if (!this.provider) return;
     const span = this.viewEnd - this.viewStart;
-    if (!samples || span <= 0) return null;
+    if (span <= 0) return;
+    ctx.fillStyle = "#8a8a94";
+    ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
+    const msg =
+      span > this.provider.maxWindowSec
+        ? "ไฟล์ยาว — ซูมเข้า (ช่วงที่มอง ≤ 2 นาที) เพื่อดู spectrogram"
+        : "กำลังโหลด spectrogram…";
+    ctx.fillText(msg, width / 2, height / 2);
+  }
 
-    const sr = this.sampleRate;
+  /** Make sure this.window covers the viewport (+ FFT margin); fetch if not. */
+  private ensureWindow(width: number): boolean {
+    const provider = this.provider;
+    const span = this.viewEnd - this.viewStart;
+    if (!provider || span <= 0 || span > provider.maxWindowSec) return false;
+
+    const sr = provider.sampleRate;
+    const hop = (span * sr) / Math.max(width, 1);
+    const marginSec = (chooseFftSize(hop) / 2 + 1) / sr;
+    // the file's edges bound what any window can ever cover
+    const needFrom = Math.max(0, this.viewStart - marginSec);
+    const needTo = Math.min(provider.durationSec, this.viewEnd + marginSec);
+    const w = this.window;
+    if (
+      w &&
+      w.startSec <= needFrom + 1e-6 &&
+      w.startSec + w.data.length / w.sampleRate >= needTo - 1e-6
+    ) {
+      return true;
+    }
+
+    const gen = ++this.fetchGen;
+    void provider.getWindow(needFrom, needTo).then(
+      (win) => {
+        if (gen !== this.fetchGen) return; // superseded by a newer viewport
+        this.window = win;
+        this.invalidateBase();
+      },
+      () => undefined, // fetch failed — keep whatever we had
+    );
+    return false;
+  }
+
+  private computeBase(width: number, height: number): ImageData | null {
+    const span = this.viewEnd - this.viewStart;
+    if (span <= 0 || !this.ensureWindow(width)) return null;
+    const pcm = this.window!;
+    const samples = pcm.data;
+    const offset = pcm.startSec;
+
+    const sr = pcm.sampleRate;
     const hop = (span * sr) / width;
     const fftSize = chooseFftSize(hop);
     let win = this.windowCache.get(fftSize);
@@ -185,7 +241,8 @@ export class SpectrogramView {
 
     for (let x = 0; x < width; x++) {
       const centerSec = this.viewStart + ((x + 0.5) / width) * span;
-      const from = Math.round(centerSec * sr) - fftSize / 2;
+      // sample indices are relative to the window, not the file start
+      const from = Math.round((centerSec - offset) * sr) - fftSize / 2;
       frame.fill(0);
       const copyFrom = Math.max(0, from);
       const copyTo = Math.min(samples.length, from + fftSize);

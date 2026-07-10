@@ -17,6 +17,7 @@ APP_VERSION = "1.0.1"
 # reachable from anywhere outside the local app.
 ALLOWED_ORIGINS = [
     "http://localhost:1420",  # tauri dev (vite)
+    "http://localhost:1421",  # vite-debug preview (dev only, still localhost)
     "tauri://localhost",  # tauri production (macOS/Linux)
     "http://tauri.localhost",  # tauri production (Windows)
 ]
