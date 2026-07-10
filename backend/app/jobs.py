@@ -129,9 +129,20 @@ class JobStore:
         from .render import render_export  # numpy/av import kept lazy
 
         assert job.out_path is not None and job.edl is not None
-        job.progress = 0.1
         job.check_cancelled()
-        job.result = render_export(job.path, job.out_path, job.edl)
+
+        def on_progress(frac: float) -> None:
+            job.progress = frac
+
+        # streaming render: progress is real (seconds decoded / duration)
+        # and cancel is checked on every chunk, even mid-hour-long files
+        job.result = render_export(
+            job.path,
+            job.out_path,
+            job.edl,
+            on_progress=on_progress,
+            check_cancelled=job.check_cancelled,
+        )
         job.progress = 1.0
         job.status = JobStatus.DONE
 
