@@ -38,6 +38,57 @@ export class TranscriptView {
     window.addEventListener("mouseup", () => {
       this.dragFrom = null;
     });
+
+    // Event DELEGATION (Phase 9d): five listeners on the container instead of
+    // five per word — an hour-long transcript (tens of thousands of tokens)
+    // would otherwise carry ~100k listeners. Token spans are identified by
+    // data-ti; clicks on segment ✎ buttons/editors simply don't match.
+    const tokenAt = (e: Event): number | null => {
+      const hit = (e.target as HTMLElement).closest?.("[data-ti]");
+      return hit ? Number((hit as HTMLElement).dataset.ti) : null;
+    };
+    this.container.addEventListener("click", (e) => {
+      const i = tokenAt(e);
+      if (i === null || this.editing) return;
+      if (this.dragMoved) {
+        this.dragMoved = false; // this click ended a drag-selection
+        return;
+      }
+      if (e.shiftKey && this.anchor !== null) {
+        this.setSelection(this.anchor, i);
+        return;
+      }
+      this.anchor = i;
+      this.setSelection(i, i);
+    });
+    this.container.addEventListener("mousedown", (e) => {
+      const i = tokenAt(e);
+      if (i !== null && !this.editing) this.dragFrom = i;
+    });
+    // mouseover bubbles (mouseenter does not) — spans are flat text so the
+    // target is always the span itself
+    this.container.addEventListener("mouseover", (e) => {
+      const i = tokenAt(e);
+      if (
+        i !== null &&
+        this.dragFrom !== null &&
+        ((e as MouseEvent).buttons & 1) === 1 &&
+        i !== this.dragFrom
+      ) {
+        this.dragMoved = true;
+        this.setSelection(this.dragFrom, i);
+      }
+    });
+    this.container.addEventListener("dblclick", (e) => {
+      const i = tokenAt(e);
+      if (i !== null) this.startEdit(i, this.spans[i]);
+    });
+    this.container.addEventListener("contextmenu", (e) => {
+      const i = tokenAt(e);
+      if (i === null) return;
+      e.preventDefault();
+      this.callbacks.onToggleExclude(i);
+    });
   }
 
   render(project: Project): void {
@@ -75,33 +126,9 @@ export class TranscriptView {
       // Text-editor model (chosen by the user, FIXES.md #8): click = SELECT
       // that word (silent, playhead moves to it), Shift+click extends, drag
       // sweeps. Listening is explicit: Space or "ฟังช่วงที่เลือก".
-      span.addEventListener("click", (e) => {
-        if (this.editing) return;
-        if (this.dragMoved) {
-          this.dragMoved = false; // this click ended a drag-selection
-          return;
-        }
-        if (e.shiftKey && this.anchor !== null) {
-          this.setSelection(this.anchor, i);
-          return;
-        }
-        this.anchor = i;
-        this.setSelection(i, i);
-      });
-      span.addEventListener("mousedown", () => {
-        if (!this.editing) this.dragFrom = i;
-      });
-      span.addEventListener("mouseenter", (e) => {
-        if (this.dragFrom !== null && (e.buttons & 1) === 1 && i !== this.dragFrom) {
-          this.dragMoved = true;
-          this.setSelection(this.dragFrom, i);
-        }
-      });
-      span.addEventListener("dblclick", () => this.startEdit(i, span));
-      span.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        this.callbacks.onToggleExclude(i);
-      });
+      // All handled by the delegated container listeners (constructor) —
+      // the span only carries its token index.
+      span.dataset.ti = String(i);
       this.spans.push(span);
       wordsWrap!.appendChild(span);
       this.refresh(i);
