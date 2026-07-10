@@ -22,6 +22,7 @@ import type { AudioInfo, ExportAudioResult, TranscribeResult } from "./api";
 import { AudioPlayer, sliderToPxPerSec } from "./audio/player";
 import { MemorySamples, RemoteSamples, snapWithProvider } from "./audio/samples";
 import type { SampleProvider } from "./audio/samples";
+import { WaveformDetail } from "./audio/wavedetail";
 import { clampCutBounds, snapCutPoint } from "./audio/snap";
 import { SpectrogramView } from "./audio/spectrogram";
 import { Project } from "./project";
@@ -377,6 +378,8 @@ function setup(): void {
         sampleProvider = new MemorySamples(decoded.data, decoded.sampleRate);
       }
       spectrogram.setProvider(sampleProvider);
+      // overlay only for long-file (remote) mode — short files are exact already
+      waveDetail.setProvider(decoded ? null : sampleProvider);
     },
     onTime: updateTime,
     onPlayState: (playing) => {
@@ -399,8 +402,18 @@ function setup(): void {
       player.pause();
       setSelectionBounds({ start, end });
     },
-    onViewport: (start, end) => spectrogram.setViewport(start, end),
+    onViewport: (start, end) => {
+      spectrogram.setViewport(start, end);
+      waveDetail.setViewport(start, end);
+    },
   });
+
+  // Long-file deep zoom: true-PCM waveform over the peaks view (Phase 9e).
+  // Activates only with a RemoteSamples provider (main sets it below).
+  const waveDetail = new WaveformDetail(
+    el<HTMLCanvasElement>("#wave-detail"),
+    (active) => player.setWaveHidden(active),
+  );
 
   const spectrogram = new SpectrogramView(el<HTMLCanvasElement>("#spectrogram"), {
     onSeek: (t) => player.seekTo(t),
@@ -605,6 +618,7 @@ function setup(): void {
     player.clear();
     sampleProvider = null;
     spectrogram.setProvider(null);
+    waveDetail.setProvider(null);
     spectrogram.setOverlays([], null);
     playBtn.disabled = true;
     zoomSlider.disabled = true;

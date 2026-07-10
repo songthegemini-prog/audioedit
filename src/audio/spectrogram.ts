@@ -107,6 +107,7 @@ export class SpectrogramView {
     canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
     canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
+    window.addEventListener("resize", () => this.invalidateBase());
   }
 
   setProvider(provider: SampleProvider | null): void {

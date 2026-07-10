@@ -8,10 +8,11 @@ import { pcmToWavBlob } from "./wav";
 export const MIN_PX_PER_SEC = 20;
 // 48000 px/s ≈ one pixel per sample — the sample-level zoom CLAUDE.md requires
 export const MAX_PX_PER_SEC = 48000;
-// Long-file mode: peaks have ~23ms resolution, so deeper waveform zoom shows
-// nothing new (and hour-long canvases get huge) — precision work happens on
-// the spectrogram (real PCM windows) + the ±1ms fine-tune bar.
-export const LONG_MODE_MAX_PX_PER_SEC = 2000;
+// Long-file mode zoom cap (Phase 9e): the WaveformDetail overlay draws true
+// PCM at any zoom, so the only remaining limit is the browser's maximum
+// element width (~33M CSS px) for wavesurfer's scroll strip. Budget 25M px:
+// 30 min ≈ 13.8k px/s (near sample level), 1 h ≈ 6.9k, 3 h ≈ 2.3k.
+export const LONG_MODE_PX_BUDGET = 25_000_000;
 
 const CUT_COLOR = "rgba(248, 81, 73, 0.28)";
 const SELECTION_COLOR = "rgba(80, 140, 255, 0.28)";
@@ -173,7 +174,7 @@ export class AudioPlayer {
     this.rangeEnd = null;
     this.skipCuts = null;
     this.decoded = null;
-    this.maxPxPerSec = LONG_MODE_MAX_PX_PER_SEC;
+    this.maxPxPerSec = Math.min(MAX_PX_PER_SEC, LONG_MODE_PX_BUDGET / duration);
     this.regions.clearRegions();
     // one symmetric display value per bucket — wavesurfer mirrors it
     const display = new Float32Array(peaks.length / 2);
@@ -215,6 +216,16 @@ export class AudioPlayer {
 
   zoom(pxPerSec: number): void {
     if (this.loaded) this.ws.zoom(Math.min(pxPerSec, this.maxPxPerSec));
+  }
+
+  /** Deep-zoom overlay active: hide wavesurfer's own (blocky) bars so only
+   * the true-PCM waveform shows. Regions/cursor are DOM and stay visible. */
+  setWaveHidden(hidden: boolean): void {
+    this.ws.setOptions(
+      hidden
+        ? { waveColor: "transparent", progressColor: "transparent" }
+        : { waveColor: "#5b8dbb", progressColor: "#8ab4f8" },
+    );
   }
 
   private emitViewport(): void {
