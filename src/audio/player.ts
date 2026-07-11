@@ -78,14 +78,11 @@ export class AudioPlayer {
     // renders a crisp visible-window spectrogram from onViewport events.)
 
     this.regions = this.ws.registerPlugin(RegionsPlugin.create());
-    this.regions.enableDragSelection({ color: SELECTION_COLOR });
-    this.regions.on("region-created", (region: Region) => {
-      // addRegion() also fires this — only adopt regions born from dragging
-      const isOurs = region.id === SELECTION_ID || /^\d+$/.test(region.id);
-      if (isOurs) return;
-      events.onWaveformSelection?.(region.start, region.end);
-      region.remove(); // main re-adds it as the canonical selection region
-    });
+    // Drag-to-select is implemented BY US, not the plugin's
+    // enableDragSelection: its mid-drag math misfires on WKWebView (the
+    // packaged app) and ballooned the region to the end of the file on
+    // every drag (FIXES.md #18). Same handler pattern as the spectrogram.
+    this.initDragSelection();
     this.regions.on("region-updated", (region: Region) => {
       if (region.id === SELECTION_ID) {
         events.onSelectionRegionUpdated?.(region.start, region.end);
@@ -139,6 +136,68 @@ export class AudioPlayer {
     this.ws.on("play", () => events.onPlayState?.(true));
     this.ws.on("pause", () => events.onPlayState?.(false));
     this.ws.on("finish", () => events.onPlayState?.(false));
+  }
+
+  /** Our own drag-to-select on the waveform (replaces the plugin's
+   * enableDragSelection — see the note in the constructor / FIXES.md #18).
+   * Times come from ONE formula we control: pointer x as a fraction of the
+   * wrapper's width (the wrapper spans the whole file), so a drag can never
+   * compute times beyond where the mouse actually is. */
+  private initDragSelection(): void {
+    const wrapper = this.ws.getWrapper();
+    let from: { x: number; time: number; pointerId: number } | null = null;
+    let moved = false;
+
+    const timeAt = (clientX: number): number | null => {
+      const rect = wrapper.getBoundingClientRect();
+      if (rect.width <= 0 || this.duration <= 0) return null;
+      const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return frac * this.duration;
+    };
+
+    wrapper.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0 || from !== null || !this.loaded) return;
+      // presses on an existing region (body or resize handle) belong to the
+      // plugin's resize logic — only empty-waveform presses start a selection
+      if ((e.target as HTMLElement).closest?.('[part*="region"]')) return;
+      const time = timeAt(e.clientX);
+      if (time === null) return;
+      from = { x: e.clientX, time, pointerId: e.pointerId };
+      moved = false;
+    });
+
+    window.addEventListener("pointermove", (e: PointerEvent) => {
+      if (!from || e.pointerId !== from.pointerId) return;
+      if (!moved && Math.abs(e.clientX - from.x) < 3) return; // click, not drag
+      moved = true;
+      const time = timeAt(e.clientX);
+      if (time === null) return;
+      // live preview while dragging — same blue canonical selection region
+      this.setSelectionRegion(Math.min(from.time, time), Math.max(from.time, time));
+    });
+
+    const endDrag = (e: PointerEvent) => {
+      if (!from || e.pointerId !== from.pointerId) return;
+      const start = from.time;
+      const wasDrag = moved;
+      from = null;
+      moved = false;
+      if (!wasDrag) return; // plain click — wavesurfer's click-to-seek handles it
+      // a drag must not ALSO seek: swallow the click that follows pointerup
+      const swallow = (ce: MouseEvent) => {
+        ce.stopPropagation();
+        ce.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 50);
+      const time = timeAt(e.clientX);
+      if (time === null) return;
+      const lo = Math.min(start, time);
+      const hi = Math.max(start, time);
+      if (hi - lo > 0.01) this.events.onWaveformSelection?.(lo, hi);
+    };
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
   }
 
   /** Reset to the empty state (New project): stop, drop audio, clear regions. */
