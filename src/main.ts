@@ -320,7 +320,12 @@ function setup(): void {
   });
 
   const updateTime = (current: number) => {
-    timeDisplay.textContent = `${formatTime(current)} / ${formatTime(player.duration)}`;
+    // While no file is loaded (mid-teardown of งานใหม่), wavesurfer can still
+    // emit stray timeupdates carrying the OLD duration — render zeros instead
+    // of letting them repaint the previous file's length (FIXES.md #19)
+    timeDisplay.textContent = player.isLoaded
+      ? `${formatTime(current)} / ${formatTime(player.duration)}`
+      : "0:00.0 / 0:00.0";
     transcript.highlightAt(current);
   };
 
@@ -624,6 +629,9 @@ function setup(): void {
     zoomSlider.disabled = true;
     zoomSlider.value = "0";
     transcript.clear();
+    // ws.empty() loads a blank URL whose "ready" never fires, so nothing
+    // downstream refreshes the clock — reset it explicitly (FIXES.md #19)
+    timeDisplay.textContent = "0:00.0 / 0:00.0";
     transcriptEl.textContent =
       'ยังไม่ได้เปิดไฟล์ — กด "เปิดไฟล์เสียง" เพื่อเริ่ม (เปิดไฟล์ .audioedit.json ได้ด้วย)';
     fileName.textContent = 'ยังไม่ได้เปิดไฟล์ — กด "เปิดไฟล์เสียง" เพื่อเริ่ม';

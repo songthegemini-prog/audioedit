@@ -46,6 +46,7 @@ export class AudioPlayer {
   private ws: WaveSurfer;
   private regions: RegionsPlugin;
   private loaded = false;
+  private loading = false; // a loadBlob/loadStream we initiated is in flight
   private rangeEnd: number | null = null; // "ฟังช่วงที่เลือก" stop point
   private skipCuts: readonly Cut[] | null = null; // test-cut mode
   private pxPerSec = MIN_PX_PER_SEC;
@@ -97,6 +98,11 @@ export class AudioPlayer {
     });
 
     this.ws.on("ready", (duration) => {
+      // Only a load WE started counts: ws.empty() (used by clear/งานใหม่)
+      // also emits "ready", and accepting it would flip the player back to
+      // "loaded" with the previous file's duration (FIXES.md #19).
+      if (!this.loading) return;
+      this.loading = false;
       this.loaded = true;
       events.onReady?.(duration);
       this.emitViewport();
@@ -138,15 +144,24 @@ export class AudioPlayer {
   /** Reset to the empty state (New project): stop, drop audio, clear regions. */
   clear(): void {
     this.loaded = false;
+    this.loading = false;
     this.rangeEnd = null;
     this.skipCuts = null;
     this.decoded = null;
     this.regions.clearRegions();
+    this.sweepOrphanRegions();
+    // ws.empty() alone leaves the previous audio attached to the media
+    // element (old duration, old sound) — detach it for real (FIXES.md #19)
+    const media = this.ws.getMediaElement();
+    media.pause();
+    media.removeAttribute("src");
+    media.load();
     this.ws.empty();
   }
 
   async loadBlob(blob: Blob): Promise<void> {
     this.loaded = false;
+    this.loading = true;
     this.rangeEnd = null;
     this.skipCuts = null;
     this.maxPxPerSec = MAX_PX_PER_SEC;
@@ -171,6 +186,7 @@ export class AudioPlayer {
    * (FIXES #7/#13) while the frontend never holds the audio in memory. */
   async loadStream(url: string, peaks: Float32Array, duration: number): Promise<void> {
     this.loaded = false;
+    this.loading = true;
     this.rangeEnd = null;
     this.skipCuts = null;
     this.decoded = null;
@@ -270,12 +286,32 @@ export class AudioPlayer {
     this.skipCuts = cuts;
   }
 
+  /** The regions plugin appends a drag-created region's element to the DOM at
+   * drag START but only registers it in its tracked list on a clean drag END.
+   * If the end never fires (a second trackpad touch mid-drag, focus loss, …)
+   * that element is orphaned: it stays visible forever and no clearRegions()
+   * can reach it — seen as a stuck blue bar across the file (FIXES.md #18).
+   * Sweep the container and drop any region element we don't know about. */
+  private sweepOrphanRegions(): void {
+    const container = (
+      this.regions as unknown as { regionsContainer?: HTMLElement }
+    ).regionsContainer;
+    if (!container) return;
+    const live = new Set(
+      this.regions.getRegions().map((r) => (r as unknown as { element?: Element }).element),
+    );
+    for (const child of [...container.children]) {
+      if (!live.has(child)) child.remove();
+    }
+  }
+
   /** Red, edge-draggable regions for every cut in the EDL (id = cut index). */
   setCutRegions(cuts: readonly Cut[]): void {
     if (!this.loaded) return;
     for (const region of [...this.regions.getRegions()]) {
       if (region.id !== SELECTION_ID) region.remove();
     }
+    this.sweepOrphanRegions();
     cuts.forEach((cut, i) => {
       this.regions.addRegion({
         id: String(i),
@@ -307,6 +343,7 @@ export class AudioPlayer {
     for (const region of [...this.regions.getRegions()]) {
       if (region.id === SELECTION_ID) region.remove();
     }
+    this.sweepOrphanRegions();
   }
 
   /** Decoded mono samples for snap/spectrogram (channel 0 of OUR buffer). */
