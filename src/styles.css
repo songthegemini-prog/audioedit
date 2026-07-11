@@ -437,3 +437,16 @@ body {
   pointer-events: none;
   z-index: 5;
 }
+
+/* View-only toggle: hide struck-through words (excluded fillers + cut words)
+   so the transcript reads as clean content; the data never changes. */
+.transcript.hide-excluded .token-excluded,
+.transcript.hide-excluded .token-cut {
+  display: none;
+}
+
+#toggle-excluded-btn.active {
+  background-color: #3d2f14;
+  border-color: #c9a227;
+  color: #e8d9a0;
+}

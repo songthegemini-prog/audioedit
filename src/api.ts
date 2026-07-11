@@ -176,7 +176,9 @@ export interface AudioInfo {
 
 /** Fast metadata probe (no decode) — picks short vs long mode. */
 export async function audioInfo(path: string): Promise<AudioInfo> {
-  const res = await fetch(`${apiBase()}/audio_info?path=${encodeURIComponent(path)}`);
+  const res = await fetch(`${apiBase()}/audio_info?path=${encodeURIComponent(path)}`, {
+    signal: AbortSignal.timeout(5000),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -202,12 +204,17 @@ export function audioFileUrl(path: string): string {
 
 /** Precomputed waveform peaks: interleaved min,max float32 pairs. */
 export async function fetchPeaks(path: string): Promise<Float32Array> {
-  const res = await fetch(`${apiBase()}/peaks?path=${encodeURIComponent(path)}`);
+  const res = await fetch(`${apiBase()}/peaks?path=${encodeURIComponent(path)}`, {
+    signal: AbortSignal.timeout(15000),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return new Float32Array(await res.arrayBuffer());
 }
 
-/** Float32 mono window from the canonical WAV (same PCM as playback). */
+/** Float32 mono window from the canonical WAV (same PCM as playback).
+ * MUST time out: word-click snapping awaits this — a hung request with no
+ * timeout froze every subsequent click until the file was reopened, and
+ * stuck connections eventually starved the whole per-origin pool. */
 export async function fetchPcmWindow(
   path: string,
   start: number,
@@ -215,6 +222,7 @@ export async function fetchPcmWindow(
 ): Promise<{ data: Float32Array; sampleRate: number }> {
   const res = await fetch(
     `${apiBase()}/pcm?path=${encodeURIComponent(path)}&start=${start}&end=${end}`,
+    { signal: AbortSignal.timeout(8000) },
   );
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const sampleRate = Number(res.headers.get("x-sample-rate") ?? 0);

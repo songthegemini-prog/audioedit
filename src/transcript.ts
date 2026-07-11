@@ -24,6 +24,8 @@ export class TranscriptView {
   private spans: HTMLSpanElement[] = [];
   private activeIndex = -1;
   private editing = false;
+  private editingIndex = -1; // which span holds the open edit box (-1 = segment box)
+  private editorEl: HTMLElement | null = null; // the live input/textarea
   private searchTokens = new Set<number>();
   private currentSearchTokens = new Set<number>();
   private anchor: number | null = null; // last plain-clicked token (shift+click end)
@@ -49,7 +51,7 @@ export class TranscriptView {
     };
     this.container.addEventListener("click", (e) => {
       const i = tokenAt(e);
-      if (i === null || this.editing) return;
+      if (i === null || this.editingActive()) return;
       if (this.dragMoved) {
         this.dragMoved = false; // this click ended a drag-selection
         return;
@@ -63,7 +65,7 @@ export class TranscriptView {
     });
     this.container.addEventListener("mousedown", (e) => {
       const i = tokenAt(e);
-      if (i !== null && !this.editing) this.dragFrom = i;
+      if (i !== null && !this.editingActive()) this.dragFrom = i;
     });
     // mouseover bubbles (mouseenter does not) — spans are flat text so the
     // target is always the span itself
@@ -101,6 +103,10 @@ export class TranscriptView {
     this.selection = null;
     this.dragFrom = null;
     this.dragMoved = false;
+    // a full re-render destroys any open edit box — reset the latch with it
+    this.editing = false;
+    this.editingIndex = -1;
+    this.editorEl = null;
     this.container.textContent = "";
     const frag = document.createDocumentFragment();
     const segments = project.transcription.segments;
@@ -152,8 +158,9 @@ export class TranscriptView {
   }
 
   private startSegmentEdit(segIndex: number, block: HTMLElement): void {
-    if (!this.project || this.editing) return;
+    if (!this.project || this.editingActive()) return;
     this.editing = true;
+    this.editingIndex = -1; // segment box lives in the block, not a span
     this.callbacks.onEditStart();
 
     const textarea = document.createElement("textarea");
@@ -161,11 +168,13 @@ export class TranscriptView {
     textarea.value = this.project.segmentEffectiveText(segIndex);
     block.textContent = "";
     block.appendChild(textarea);
+    this.editorEl = textarea;
     textarea.focus();
 
     const finish = (commit: boolean) => {
       if (!this.editing) return;
       this.editing = false;
+      this.editorEl = null;
       const value = textarea.value.trim();
       if (commit && value) {
         block.textContent = "กำลังตรึงวรรคกับเสียงใหม่…";
@@ -219,6 +228,9 @@ export class TranscriptView {
     this.anchor = null;
     this.searchTokens.clear();
     this.currentSearchTokens.clear();
+    this.editing = false;
+    this.editingIndex = -1;
+    this.editorEl = null;
     this.container.textContent = "";
   }
 
@@ -231,6 +243,10 @@ export class TranscriptView {
     const project = this.project;
     const span = this.spans[i];
     if (!project || !span) return;
+    // NEVER repaint the span holding an open edit box: textContent wipes the
+    // input WITHOUT its blur firing, leaving `editing` latched true and every
+    // later click swallowed (FIXES.md #20). finish() refreshes it afterwards.
+    if (this.editing && i === this.editingIndex) return;
     const token = project.transcription.tokens[i];
     span.textContent = project.effectiveText(i);
 
@@ -315,10 +331,25 @@ export class TranscriptView {
     if (span) this.startEdit(i, span);
   }
 
+  /** editing flag with self-healing: if the edit box vanished without its
+   * blur/keydown firing (removing a focused element fires NO blur), reset the
+   * flag instead of eating every future click forever (FIXES.md #20). */
+  private editingActive(): boolean {
+    if (!this.editing) return false;
+    if (!this.editorEl?.isConnected) {
+      this.editing = false;
+      this.editingIndex = -1;
+      this.editorEl = null;
+    }
+    return this.editing;
+  }
+
   private startEdit(i: number, span: HTMLSpanElement): void {
-    if (!this.project || this.editing) return;
+    if (!this.project || this.editingActive()) return;
     this.editing = true;
+    this.editingIndex = i;
     this.callbacks.onEditStart();
+    // (editorEl is assigned right after the input is created below)
 
     const input = document.createElement("input");
     input.className = "token-input";
@@ -326,12 +357,15 @@ export class TranscriptView {
     input.style.width = `${Math.max(input.value.length + 2, 4)}ch`;
     span.textContent = "";
     span.appendChild(input);
+    this.editorEl = input;
     input.focus();
     input.select();
 
     const finish = (commit: boolean) => {
       if (!this.editing) return;
       this.editing = false;
+      this.editingIndex = -1;
+      this.editorEl = null;
       if (commit) this.callbacks.onEditText(i, input.value);
       this.refresh(i); // restores the span content in both cases
     };

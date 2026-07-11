@@ -58,6 +58,7 @@ function setup(): void {
   const cancelJobBtn = el<HTMLButtonElement>("#cancel-job-btn");
   const reviewCountEl = el<HTMLElement>("#review-count");
   const hideFillersBtn = el<HTMLButtonElement>("#hide-fillers-btn");
+  const toggleExcludedBtn = el<HTMLButtonElement>("#toggle-excluded-btn");
   const saveBtn = el<HTMLButtonElement>("#save-btn");
   const timeDisplay = el<HTMLElement>("#time-display");
   const zoomSlider = el<HTMLInputElement>("#zoom-slider");
@@ -360,6 +361,7 @@ function setup(): void {
     saveBtn.disabled = !hasProject;
     saveAsBtn.disabled = !hasProject;
     hideFillersBtn.disabled = !hasProject;
+    toggleExcludedBtn.disabled = !hasProject;
     searchInput.disabled = !hasProject;
     if (!hasProject) {
       searchInput.value = "";
@@ -475,6 +477,8 @@ function setup(): void {
       // backend is unreachable, fall back to the in-memory path unchanged.
       let info: AudioInfo | null = null;
       try {
+        await health(); // re-probe/lock the backend first — right after
+        // startup apiBase() may still point at the wrong candidate port
         info = await audioInfo(path);
       } catch {
         info = null;
@@ -643,11 +647,26 @@ function setup(): void {
   };
   newBtn.addEventListener("click", newProject);
 
+  // View-only toggle (asked 2026-07-11): read the transcript as clean
+  // content by hiding struck-through words; click again to review them.
+  let hideExcluded = false;
+  toggleExcludedBtn.addEventListener("click", () => {
+    hideExcluded = !hideExcluded;
+    transcriptEl.classList.toggle("hide-excluded", hideExcluded);
+    toggleExcludedBtn.classList.toggle("active", hideExcluded);
+    toggleExcludedBtn.textContent = hideExcluded ? "โชว์คำขีดฆ่า" : "ซ่อนคำขีดฆ่า";
+  });
+
   hideFillersBtn.addEventListener("click", () => {
     if (!project) return;
-    project.excludeAllFillers();
+    const changed = project.excludeAllFillers();
     transcript.refreshAll();
     updateDirty();
+    // Silent no-op looked broken when the file simply had no fillers —
+    // always tell the user what happened (reported 2026-07-11)
+    fileName.textContent = changed
+      ? `ซ่อนคำ filler แล้ว ${changed} คำ (ขีดทิ้งในบท — เสียงยังอยู่ ไม่ไปอยู่ในเอกสารตอน export)`
+      : "ไม่พบคำ filler (อ่า/อืม/เอ่อ ฯลฯ) เพิ่มในบทนี้ — คำที่เคยซ่อนแล้วยังซ่อนอยู่";
   });
 
   // --- playback + keyboard ---
