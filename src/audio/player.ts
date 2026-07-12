@@ -62,7 +62,11 @@ export class AudioPlayer {
       container,
       height: 120,
       waveColor: "#5b8dbb",
-      progressColor: "#8ab4f8",
+      // progress === wave: an editor must NOT paint the played region a
+      // different (pale blue) colour — that "progress bar to the cursor"
+      // looked like a stuck full-width selection (FIXES.md #18). The white
+      // cursor line alone shows the playhead.
+      progressColor: "#5b8dbb",
       cursorColor: "#f0f0f0",
       minPxPerSec: MIN_PX_PER_SEC,
       autoScroll: true,
@@ -202,33 +206,6 @@ export class AudioPlayer {
     window.addEventListener("pointercancel", endDrag);
   }
 
-  /** Diagnostic dump (Cmd+Shift+D): what the regions layer REALLY contains —
-   * for chasing the WKWebView-only phantom full-width bar (FIXES.md #18). */
-  debugRegions(): string {
-    const wrapper = this.ws.getWrapper();
-    const wrapperW = Math.round(wrapper.getBoundingClientRect().width);
-    const regs = this.regions.getRegions().map((r) => {
-      const el = (r as unknown as { element?: HTMLElement }).element;
-      const rect = el?.getBoundingClientRect();
-      return (
-        `${r.id}[${r.start.toFixed(1)}-${r.end.toFixed(1)}` +
-        `|w${rect ? Math.round(rect.width) : "-"}px` +
-        `|L${el?.style.left ?? "-"}|R${el?.style.right ?? "-"}` +
-        `|${el?.isConnected ? "on" : "off"}]`
-      );
-    });
-    const container = (
-      this.regions as unknown as { regionsContainer?: HTMLElement }
-    ).regionsContainer;
-    const strays = container
-      ? [...container.children].length - regs.filter((s) => s.includes("|on]")).length
-      : -1;
-    return (
-      `dur=${this.duration.toFixed(1)} wrapW=${wrapperW} ` +
-      `regions=${regs.join(" ")} strayEls=${strays}`
-    );
-  }
-
   /** Reset to the empty state (New project): stop, drop audio, clear regions. */
   clear(): void {
     this.loaded = false;
@@ -328,7 +305,7 @@ export class AudioPlayer {
     this.ws.setOptions(
       hidden
         ? { waveColor: "transparent", progressColor: "transparent" }
-        : { waveColor: "#5b8dbb", progressColor: "#8ab4f8" },
+        : { waveColor: "#5b8dbb", progressColor: "#5b8dbb" },
     );
   }
 

@@ -677,41 +677,6 @@ function setup(): void {
       saveProject();
       return;
     }
-    // ปุ่มลับวินิจฉัย: กดตอนเจอแถบประหลาด แล้วถ่ายภาพข้อความที่ขึ้นส่งให้ผู้พัฒนา
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d") {
-      e.preventDefault();
-      // round 2: regions were proven innocent — scan EVERYTHING inside #waves
-      // that is (a) nearly viewport-wide AND (b) painted, including canvases
-      const wide: string[] = [];
-      const vw = window.innerWidth;
-      const scan = (root: Element | ShadowRoot) => {
-        for (const child of root.querySelectorAll("*")) {
-          const rect = child.getBoundingClientRect();
-          if (rect.width >= vw * 0.85 && rect.height > 20) {
-            const bg = getComputedStyle(child).backgroundColor;
-            const painted = bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent";
-            let note = "";
-            if (child instanceof HTMLCanvasElement && child.width > 0) {
-              const px = child
-                .getContext("2d")
-                ?.getImageData(2, 2, 1, 1).data;
-              note = px ? `px@2,2=${px.join(",")}` : "";
-            }
-            if (painted || note) {
-              wide.push(
-                `${child.tagName}${child.className ? "." + String(child.className).slice(0, 12) : ""}` +
-                  `[part=${child.getAttribute("part") ?? "-"}|w${Math.round(rect.width)}|bg=${bg}|${note}]`,
-              );
-            }
-          }
-          if (child.shadowRoot) scan(child.shadowRoot);
-        }
-      };
-      const waves = document.querySelector("#waves");
-      if (waves) scan(waves);
-      fileName.textContent = `🔍2 vw=${vw} wide=${wide.join(" ") || "none"} | ${player.debugRegions()}`;
-      return;
-    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
       e.preventDefault();
       searchInput.focus();
