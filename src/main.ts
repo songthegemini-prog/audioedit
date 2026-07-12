@@ -654,7 +654,7 @@ function setup(): void {
     hideExcluded = !hideExcluded;
     transcriptEl.classList.toggle("hide-excluded", hideExcluded);
     toggleExcludedBtn.classList.toggle("active", hideExcluded);
-    toggleExcludedBtn.textContent = hideExcluded ? "โชว์คำขีดฆ่า" : "ซ่อนคำขีดฆ่า";
+    toggleExcludedBtn.textContent = hideExcluded ? "โชว์คำที่ไม่ใช้" : "ซ่อนคำที่ไม่ใช้";
   });
 
   hideFillersBtn.addEventListener("click", () => {
