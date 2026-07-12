@@ -70,6 +70,25 @@ describe("Project EDL", () => {
     expect(p.isTokenCut(0)).toBe(false);
   });
 
+  it("resizing a cut recomputes which tokens it covers (Codex #1)", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    // cut covers tokens 1 (อ่า 1.0-1.5) and 2 (ครับ 1.5-2.0)
+    p.addCut({ start: 1.0, end: 2.0, tokenRange: [1, 2] });
+    expect(p.isTokenCut(1)).toBe(true);
+    expect(p.isTokenCut(2)).toBe(true);
+    // drag the end back to 1.5 → token 2 (ครับ) is no longer inside the cut
+    p.updateCutBounds(0, 1.0, 1.5);
+    expect(p.isTokenCut(1)).toBe(true);
+    expect(p.isTokenCut(2)).toBe(false); // its audio came back → back in .docx
+  });
+
+  it("resizing a pure waveform cut stays tokenRange=null", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 1.0, end: 1.4, tokenRange: null });
+    p.updateCutBounds(0, 1.0, 2.0);
+    expect(p.edl[0].tokenRange).toBeNull();
+  });
+
   it("undo/redo walk the EDL history", () => {
     const p = new Project("/a.wav", makeTranscription());
     p.addCut({ start: 1.0, end: 1.4, tokenRange: [1, 1] });

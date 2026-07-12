@@ -68,9 +68,29 @@ export class Project {
     const cut = this.edlList[index];
     if (!cut) return;
     this.pushHistory();
-    this.edlList[index] = { ...cut, start, end };
+    // Recompute which tokens this cut covers from the NEW bounds — otherwise a
+    // resized cut keeps its old tokenRange and .docx would still omit words
+    // whose audio the resize brought back (Codex review #1). A pure waveform
+    // cut (no transcript) stays tokenRange=null.
+    const tokenRange = cut.tokenRange === null ? null : this.tokensInSpan(start, end);
+    this.edlList[index] = { ...cut, start, end, tokenRange };
     this.edlList.sort((a, b) => a.start - b.start);
     this.dirty = true;
+  }
+
+  /** [first, last] token indices whose whole span lies inside [start, end],
+   * or null if none — the same rule cutSelection() uses to create a cut. */
+  private tokensInSpan(start: number, end: number): [number, number] | null {
+    const tokens = this.transcription.tokens;
+    let lo = -1;
+    let hi = -1;
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].start >= start - 0.005 && tokens[i].end <= end + 0.005) {
+        if (lo === -1) lo = i;
+        hi = i;
+      }
+    }
+    return lo === -1 ? null : [lo, hi];
   }
 
   undo(): boolean {

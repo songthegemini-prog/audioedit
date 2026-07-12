@@ -171,7 +171,15 @@ export class WaveformDetail {
         this.window = win;
         this.requestRender();
       },
-      () => undefined,
+      () => {
+        // fetch failed (e.g. /pcm timeout): deactivate so wavesurfer's peaks
+        // waveform shows through the (already-cleared) canvas instead of a
+        // permanent blank (Codex review #5). Do NOT requestRender here — that
+        // would re-enter render → ensureWindow → fetch and hot-loop while the
+        // backend keeps failing. The next viewport change retries naturally.
+        if (gen !== this.fetchGen) return;
+        this.setActive(false);
+      },
     );
     return false;
   }

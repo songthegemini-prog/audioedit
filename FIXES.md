@@ -304,6 +304,28 @@
 - **กันเกิดซ้ำ:** คีย์ลัดหลัก (Space/เล่น) ต้องทำงานไม่ขึ้นกับว่าโฟกัสอยู่
   ปุ่มไหน — กันเฉพาะช่องพิมพ์ข้อความจริง; ทดสอบ: โฟกัสปุ่มแล้วกด Space ต้องเล่น
 
+## 23–26. บั๊กจาก code review ของ Codex (2026-07-12) — แก้ 4 ตัวแดง
+
+รีวิว read-only โดย Codex (gpt-5.6) เจอ 11 ประเด็น ไม่มี false positive; แก้กลุ่ม
+"ความถูกต้อง" 4 ตัว (ที่เหลือเป็น race โอกาสต่ำ/ของเล็ก เก็บทีหลัง):
+
+- **#23 (Codex#1) — ลากขอบ cut แคบลงแล้ว .docx ยังตัดคำที่เสียงกลับมาแล้ว:**
+  `updateCutBounds` เก็บ tokenRange เดิมไว้ → `isTokenCut` ยังมองว่าคำนั้นถูกตัด.
+  แก้: คำนวณ tokenRange ใหม่จากขอบใหม่ (`tokensInSpan`) — cut แบบไม่มีบท
+  (tokenRange=null) คงเป็น null. `src/project.ts`; เทสต์ใน project.test.ts
+- **#24 (Codex#9) — long-file cache ติด "prepared" ทั้งที่ peaks หาย:**
+  crash ระหว่าง rename WAV กับเขียน peaks → เปิดไฟล์เดิมพังถาวรที่ fetchPeaks.
+  แก้: `probe()` เช็คทั้ง WAV **และ** peaks. `backend/app/longfile.py`
+- **#25 (Codex#5) — waveform ไฟล์ยาวว่างถาวรหลัง /pcm fail ครั้งเดียว:**
+  reject handler ไม่ทำอะไร overlay ยัง active (ws ถูกซ่อน) จอเลยว่าง. แก้:
+  reject → `setActive(false)` (คืน ws peaks) **แต่ห้าม requestRender** กัน
+  hot-loop fetch. `src/audio/wavedetail.ts`; ยืนยัน pcmCalls ไม่วน
+- **#26 (Codex#10) — export ถูก cancel → ทิ้งไฟล์ครึ่งๆ + ทับไฟล์เดิมพัง:**
+  เขียนตรงลง out_path. แก้: เขียน `.part` แล้ว `replace()` ตอนจบ (atomic);
+  finally ลบ temp ทุกกรณี — ไฟล์เดิมไม่ถูกแตะจนกว่าจะสำเร็จ. `backend/app/render.py`
+- **บทเรียน:** ให้ agent ตัวอื่น review แบบ read-only เป็นระยะ — จับ edge case/
+  race ที่คนเขียนเองมองข้าม (คู่กับ AGENTS.md ที่ให้กติกาเดียวกัน)
+
 ## เช็คลิสต์สุขภาพระบบ (เมื่อ "ปุ่มกดไม่ได้/ไม่มีอะไรเกิดขึ้น")
 
 1. Status bar ล่างซ้ายเขียวไหม? แดง = backend ไม่รัน →

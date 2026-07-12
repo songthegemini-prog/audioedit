@@ -98,6 +98,32 @@ def test_stream_edl_zero_crossfade() -> None:
     assert np.array_equal(got, expected)
 
 
+def test_export_is_atomic_on_cancel(tmp_path: Path) -> None:
+    # an existing output must survive a cancelled export (no truncate, no
+    # half-written file, no leftover .part) — Codex review #10
+    sine = np.sin(2 * np.pi * 50 * np.arange(2 * SR) / SR).astype(np.float32)[:, None]
+    src = tmp_path / "src.wav"
+    write_wav(src, sine * 0.5, SR)
+    out = tmp_path / "out.wav"
+    write_wav(out, np.ones((SR, 1), np.float32), SR)  # pre-existing good file
+    before = out.read_bytes()
+
+    class Stop(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def cancel() -> None:
+        calls["n"] += 1
+        if calls["n"] > 1:  # let the first chunk through, then abort
+            raise Stop
+
+    with pytest.raises(Stop):
+        render_export(src, out, [], check_cancelled=cancel)
+    assert out.read_bytes() == before  # untouched
+    assert not out.with_name(out.name + ".part").exists()  # temp cleaned up
+
+
 def test_render_export_reports_progress_and_cancels(tmp_path: Path) -> None:
     sine = np.sin(2 * np.pi * 50 * np.arange(2 * SR) / SR).astype(np.float32)[:, None]
     src = tmp_path / "src.wav"

@@ -66,7 +66,11 @@ def probe(path: Path) -> dict:
             "duration": duration,
             "sample_rate": stream.rate,
             "channels": len(stream.layout.channels),
-            "prepared": wav_path_for(path).exists(),
+            # "prepared" needs BOTH the WAV and its peaks — a crash between the
+            # WAV rename and the peaks write leaves an orphan WAV that would
+            # make the frontend skip prepare() and then fail on fetchPeaks
+            # (Codex review #9)
+            "prepared": wav_path_for(path).exists() and peaks_path_for(path).exists(),
         }
 
 

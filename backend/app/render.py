@@ -276,8 +276,13 @@ def render_export(
     on_progress: Callable[[float], None] | None = None,
     check_cancelled: Callable[[], None] | None = None,
 ) -> dict:
-    """Stream source → EDL → 16-bit WAV with constant memory."""
+    """Stream source → EDL → 16-bit WAV with constant memory.
+
+    Writes to a temp file and renames on success, so a cancel/error never
+    leaves a truncated output and never destroys an existing file at out_path
+    (Codex review #10)."""
     chunks, sample_rate, est_duration = decode_stream(source)
+    tmp_path = out_path.with_name(out_path.name + ".part")
 
     consumed = 0  # input frames seen, for progress
 
@@ -298,7 +303,7 @@ def render_export(
         for block in stream_edl(tracked(), sample_rate, cuts):
             if writer is None:
                 channels = block.shape[1]
-                writer = wave.open(str(out_path), "wb")
+                writer = wave.open(str(tmp_path), "wb")
                 writer.setnchannels(channels)
                 writer.setsampwidth(2)  # 16-bit PCM
                 writer.setframerate(sample_rate)
@@ -307,13 +312,17 @@ def render_export(
         if writer is None:  # everything cut — still produce a valid empty WAV
             if consumed == 0:
                 raise ValueError(f"no audio decoded from {source}")
-            writer = wave.open(str(out_path), "wb")
+            writer = wave.open(str(tmp_path), "wb")
             writer.setnchannels(1)
             writer.setsampwidth(2)
             writer.setframerate(sample_rate)
+        writer.close()
+        writer = None
+        tmp_path.replace(out_path)  # atomic: out_path untouched until here
     finally:
         if writer is not None:
             writer.close()
+        tmp_path.unlink(missing_ok=True)  # drop the temp on any failure
 
     return {
         "out_path": str(out_path),

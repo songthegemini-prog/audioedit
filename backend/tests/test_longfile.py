@@ -85,6 +85,15 @@ def test_pcm_window_guards(tmp_path: Path) -> None:
         longfile.read_pcm_window(src, 0.0, longfile.MAX_WINDOW_SEC + 1)
 
 
+def test_probe_not_prepared_if_peaks_missing(tmp_path: Path) -> None:
+    # orphan WAV (crash between rename and peaks write) must read as NOT
+    # prepared, so the frontend re-runs prepare instead of failing on peaks
+    src = make_src(tmp_path)
+    longfile.prepare(src)
+    longfile.peaks_path_for(src).unlink()  # simulate the missing peaks
+    assert longfile.probe(src)["prepared"] is False
+
+
 def test_cache_key_tracks_file_changes(tmp_path: Path) -> None:
     src = make_src(tmp_path)
     key1 = longfile.cache_key(src)
