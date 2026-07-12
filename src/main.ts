@@ -677,6 +677,12 @@ function setup(): void {
       saveProject();
       return;
     }
+    // ปุ่มลับวินิจฉัย: กดตอนเจอแถบประหลาด แล้วถ่ายภาพข้อความที่ขึ้นส่งให้ผู้พัฒนา
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      fileName.textContent = `🔍 ${player.debugRegions()}`;
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
       e.preventDefault();
       searchInput.focus();

@@ -156,12 +156,14 @@ export class AudioPlayer {
     };
 
     wrapper.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.button !== 0 || from !== null || !this.loaded) return;
+      if (e.button !== 0 || !this.loaded) return;
       // presses on an existing region (body or resize handle) belong to the
       // plugin's resize logic — only empty-waveform presses start a selection
       if ((e.target as HTMLElement).closest?.('[part*="region"]')) return;
       const time = timeAt(e.clientX);
       if (time === null) return;
+      // ALWAYS adopt the new press — if a previous drag's pointerup got lost
+      // (multi-touch, focus steal) a stale `from` must not block drags forever
       from = { x: e.clientX, time, pointerId: e.pointerId };
       moved = false;
     });
@@ -198,6 +200,33 @@ export class AudioPlayer {
     };
     window.addEventListener("pointerup", endDrag);
     window.addEventListener("pointercancel", endDrag);
+  }
+
+  /** Diagnostic dump (Cmd+Shift+D): what the regions layer REALLY contains —
+   * for chasing the WKWebView-only phantom full-width bar (FIXES.md #18). */
+  debugRegions(): string {
+    const wrapper = this.ws.getWrapper();
+    const wrapperW = Math.round(wrapper.getBoundingClientRect().width);
+    const regs = this.regions.getRegions().map((r) => {
+      const el = (r as unknown as { element?: HTMLElement }).element;
+      const rect = el?.getBoundingClientRect();
+      return (
+        `${r.id}[${r.start.toFixed(1)}-${r.end.toFixed(1)}` +
+        `|w${rect ? Math.round(rect.width) : "-"}px` +
+        `|L${el?.style.left ?? "-"}|R${el?.style.right ?? "-"}` +
+        `|${el?.isConnected ? "on" : "off"}]`
+      );
+    });
+    const container = (
+      this.regions as unknown as { regionsContainer?: HTMLElement }
+    ).regionsContainer;
+    const strays = container
+      ? [...container.children].length - regs.filter((s) => s.includes("|on]")).length
+      : -1;
+    return (
+      `dur=${this.duration.toFixed(1)} wrapW=${wrapperW} ` +
+      `regions=${regs.join(" ")} strayEls=${strays}`
+    );
   }
 
   /** Reset to the empty state (New project): stop, drop audio, clear regions. */
