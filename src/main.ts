@@ -689,16 +689,23 @@ function setup(): void {
       return;
     }
     const target = e.target as HTMLElement | null;
-    if (target && ["INPUT", "TEXTAREA", "BUTTON"].includes(target.tagName)) return;
-    if (e.code === "Space") {
+    const tag = target?.tagName;
+    // Space must ALWAYS toggle playback (like every audio editor) EXCEPT while
+    // typing text. Handle it before the button guard below, and blur any
+    // focused button so it can't swallow the key — after clicking a toolbar
+    // button, focus sat on it and Space stopped playing (FIXES.md #22).
+    if (e.code === "Space" && tag !== "INPUT" && tag !== "TEXTAREA") {
       e.preventDefault();
+      (document.activeElement as HTMLElement | null)?.blur?.();
       // Sound Forge muscle memory: Shift+Space auditions the selection
       if (e.shiftKey && selectionBounds) {
         player.playRange(selectionBounds.start, selectionBounds.end);
       } else {
         player.playPause();
       }
+      return;
     }
+    if (target && ["INPUT", "TEXTAREA", "BUTTON"].includes(tag ?? "")) return;
     // Tab review queue: jump to the next doubtful word, play it, open its editor
     if (e.key === "Tab" && project) {
       const list = reviewIndices();
