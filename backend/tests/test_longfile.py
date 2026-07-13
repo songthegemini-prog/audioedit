@@ -94,6 +94,23 @@ def test_probe_not_prepared_if_peaks_missing(tmp_path: Path) -> None:
     assert longfile.probe(src)["prepared"] is False
 
 
+def test_orphan_wav_re_prepares_successfully(tmp_path: Path) -> None:
+    # Codex re-review #4: recovery must actually WORK — re-preparing over an
+    # existing orphan WAV (replace() not rename(), so it doesn't fail on
+    # Windows) restores a fully-prepared, readable cache.
+    src = make_src(tmp_path)
+    longfile.prepare(src)
+    longfile.peaks_path_for(src).unlink()  # orphan: WAV present, peaks gone
+    assert longfile.probe(src)["prepared"] is False
+    info = longfile.prepare(src)  # must overwrite the existing WAV, not crash
+    assert longfile.probe(src)["prepared"] is True
+    assert Path(info["wav_path"]).exists()
+    data, _ = longfile.read_pcm_window(src, 0.0, 0.5)
+    assert len(data) > 0
+    # no temp files left behind
+    assert not list(longfile.cache_dir().glob("*.part"))
+
+
 def test_cache_key_tracks_file_changes(tmp_path: Path) -> None:
     src = make_src(tmp_path)
     key1 = longfile.cache_key(src)

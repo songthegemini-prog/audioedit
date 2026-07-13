@@ -76,10 +76,33 @@ describe("Project EDL", () => {
     p.addCut({ start: 1.0, end: 2.0, tokenRange: [1, 2] });
     expect(p.isTokenCut(1)).toBe(true);
     expect(p.isTokenCut(2)).toBe(true);
-    // drag the end back to 1.5 → token 2 (ครับ) is no longer inside the cut
+    // drag the end back to 1.5 → token 2 (ครับ mid 1.75) no longer covered
     p.updateCutBounds(0, 1.0, 1.5);
     expect(p.isTokenCut(1)).toBe(true);
     expect(p.isTokenCut(2)).toBe(false); // its audio came back → back in .docx
+  });
+
+  it("a tiny nudge into a word keeps it cut (midpoint rule, Codex re-review #1)", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    // token 1 = อ่า 1.0-1.5 (mid 1.25); cut it exactly
+    p.addCut({ start: 1.0, end: 1.5, tokenRange: [1, 1] });
+    expect(p.isTokenCut(1)).toBe(true);
+    // nudge the start 10ms into the word — ~all its audio is still gone, so
+    // it must stay cut (whole-token-inside would have wrongly freed it)
+    p.updateCutBounds(0, 1.01, 1.5);
+    expect(p.isTokenCut(1)).toBe(true);
+    // only when the cut clears the word's midpoint does it come back
+    p.updateCutBounds(0, 1.26, 1.5);
+    expect(p.isTokenCut(1)).toBe(false);
+  });
+
+  it("expanding a cut swallows a newly-covered word", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 1.0, end: 1.5, tokenRange: [1, 1] }); // อ่า only
+    expect(p.isTokenCut(2)).toBe(false);
+    p.updateCutBounds(0, 1.0, 2.0); // now spans ครับ (mid 1.75) too
+    expect(p.isTokenCut(1)).toBe(true);
+    expect(p.isTokenCut(2)).toBe(true);
   });
 
   it("resizing a pure waveform cut stays tokenRange=null", () => {

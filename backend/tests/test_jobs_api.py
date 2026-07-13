@@ -80,6 +80,28 @@ def test_jobstore_prunes_old_finished_jobs_but_keeps_running() -> None:
     assert "done0" not in store._jobs  # oldest finished dropped first
 
 
+def test_jobstore_prunes_as_jobs_finish_without_new_submit(tmp_path: Path) -> None:
+    # Codex re-review #3: a burst of jobs is all active at submit time (nothing
+    # to prune then); once they FINISH the store must shrink on its own, with
+    # no further submit. Real lifecycle, not a staged dict.
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"fake")
+    store = JobStore(FakeEngine(), duration_fn=lambda p: 60.0)
+    n = JobStore.MAX_KEPT_JOBS + 15
+    ids = [store.submit(audio).id for _ in range(n)]
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if all(
+            (j := store.get(i)) is None
+            or j.status in ("done", "error", "cancelled")
+            for i in ids
+        ):
+            break
+        time.sleep(0.02)
+    with store._jobs_lock:
+        assert len(store._jobs) <= JobStore.MAX_KEPT_JOBS
+
+
 def test_transcribe_rejects_missing_file() -> None:
     client = make_client()
     res = client.post("/transcribe", json={"path": "/no/such/file.wav"})

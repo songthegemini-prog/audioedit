@@ -136,8 +136,14 @@ def prepare(
     if len(leftover):
         peaks.extend([float(leftover.min()), float(leftover.max())])
 
-    tmp_wav.rename(wav_out)
-    np.asarray(peaks, dtype="<f4").tofile(peaks_out)
+    # Write peaks to a temp then atomic-replace BOTH files, and use replace()
+    # (not rename()) so re-preparing an orphan WAV works on Windows too, where
+    # rename() fails if the destination exists (Codex re-review #4). "prepared"
+    # is only ever true when both complete files are present.
+    tmp_peaks = peaks_out.with_suffix(".peaks.part")
+    np.asarray(peaks, dtype="<f4").tofile(tmp_peaks)
+    tmp_wav.replace(wav_out)
+    tmp_peaks.replace(peaks_out)
     prune_cache()
     return _info(path, wav_out, peaks_out)
 

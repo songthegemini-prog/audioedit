@@ -149,6 +149,13 @@ class JobStore:
             except Exception as exc:  # surface the reason to the UI
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.status = JobStatus.ERROR
+            finally:
+                # prune here too, not only on submit — a burst of jobs may all
+                # be active when submitted (so nothing pruned then); pruning as
+                # each one finishes keeps memory flat without a later submit
+                # (Codex re-review #3)
+                with self._jobs_lock:
+                    self._prune_locked()
 
     def _run_export(self, job: Job) -> None:
         """Render the EDL into a new WAV — the source file is never touched."""

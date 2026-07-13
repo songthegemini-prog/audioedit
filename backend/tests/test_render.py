@@ -121,7 +121,31 @@ def test_export_is_atomic_on_cancel(tmp_path: Path) -> None:
     with pytest.raises(Stop):
         render_export(src, out, [], check_cancelled=cancel)
     assert out.read_bytes() == before  # untouched
-    assert not out.with_name(out.name + ".part").exists()  # temp cleaned up
+    assert not list(out.parent.glob(f"{out.name}.*.part"))  # temp cleaned up
+
+
+def test_export_success_replaces_existing_output(tmp_path: Path) -> None:
+    sine = np.sin(2 * np.pi * 50 * np.arange(2 * SR) / SR).astype(np.float32)[:, None]
+    src = tmp_path / "src.wav"
+    write_wav(src, sine * 0.5, SR)
+    out = tmp_path / "out.wav"
+    write_wav(out, np.ones((SR, 1), np.float32), SR)  # old, longer content
+    render_export(src, out, [(0.5, 1.0)])  # overwrite with the cut render
+    with wave.open(str(out)) as w:
+        frames = w.getnframes()
+    assert abs(frames - (2 * SR - 0.5 * SR - 0.01 * SR)) <= 2  # new content
+    assert not list(out.parent.glob(f"{out.name}.*.part"))
+
+
+def test_export_error_before_first_write_leaves_output_untouched(tmp_path: Path) -> None:
+    # a decode/setup error with nothing written yet must not touch out_path
+    out = tmp_path / "out.wav"
+    write_wav(out, np.ones((SR, 1), np.float32), SR)
+    before = out.read_bytes()
+    with pytest.raises(Exception):
+        render_export(tmp_path / "does-not-exist.wav", out, [])
+    assert out.read_bytes() == before
+    assert not list(out.parent.glob(f"{out.name}.*.part"))
 
 
 def test_render_export_reports_progress_and_cancels(tmp_path: Path) -> None:

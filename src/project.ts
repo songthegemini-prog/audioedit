@@ -78,14 +78,20 @@ export class Project {
     this.dirty = true;
   }
 
-  /** [first, last] token indices whose whole span lies inside [start, end],
-   * or null if none — the same rule cutSelection() uses to create a cut. */
-  private tokensInSpan(start: number, end: number): [number, number] | null {
+  /** [first, last] token indices this cut removes from the .docx, or null.
+   * A token counts as cut when its MIDPOINT falls inside [start, end] — i.e.
+   * the cut removes the majority of its audio. Whole-token-inside was wrong:
+   * nudging a cut edge 10ms into a word dropped the token entirely, so the
+   * word reappeared in the .docx while ~all its audio was gone (Codex re-review
+   * #1). Midpoint keeps the doc consistent with which words the audio loses.
+   * Cuts are contiguous in time, so the matched indices stay contiguous. */
+  tokensInSpan(start: number, end: number): [number, number] | null {
     const tokens = this.transcription.tokens;
     let lo = -1;
     let hi = -1;
     for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i].start >= start - 0.005 && tokens[i].end <= end + 0.005) {
+      const mid = (tokens[i].start + tokens[i].end) / 2;
+      if (mid >= start && mid <= end) {
         if (lo === -1) lo = i;
         hi = i;
       }

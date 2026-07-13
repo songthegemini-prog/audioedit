@@ -15,6 +15,7 @@ golden reference the streaming path is tested against.
 
 from __future__ import annotations
 
+import uuid
 import wave
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
@@ -282,7 +283,9 @@ def render_export(
     leaves a truncated output and never destroys an existing file at out_path
     (Codex review #10)."""
     chunks, sample_rate, est_duration = decode_stream(source)
-    tmp_path = out_path.with_name(out_path.name + ".part")
+    # unique temp so two exports to the same destination can't share a .part
+    # (Codex re-review #5); atomically replaced onto out_path on success
+    tmp_path = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex[:8]}.part")
 
     consumed = 0  # input frames seen, for progress
 

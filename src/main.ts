@@ -44,6 +44,10 @@ function el<T extends HTMLElement>(selector: string): T {
 
 let currentPath: string | null = null;
 let project: Project | null = null;
+// Bumped on every load / งานใหม่. Async jobs capture it and bail if it moved,
+// so a result can never land on the wrong project — even the A→other→A reopen
+// (ABA) that a path-equality check would miss (Codex re-review #2).
+let loadGeneration = 0;
 let backendUp = false;
 let modelsReady = false;
 
@@ -284,17 +288,9 @@ function setup(): void {
     // user dragged them (user adjustments are respected, never re-snapped).
     const { start, end } = selectionBounds;
     if (end - start < 0.01) return; // nothing meaningful to cut
-    // token range: the words selected, else whichever words the time range covers
-    let tokenRange: [number, number] | null = selection;
-    if (!tokenRange) {
-      const tokens = project.transcription.tokens;
-      const covered = tokens
-        .map((t, i) => ({ t, i }))
-        .filter(({ t }) => t.start >= start - 0.005 && t.end <= end + 0.005);
-      tokenRange = covered.length
-        ? [covered[0].i, covered[covered.length - 1].i]
-        : null;
-    }
+    // token range: the words selected, else whichever words the time range
+    // covers — same midpoint rule a resize uses, so create/resize agree
+    const tokenRange = selection ?? project.tokensInSpan(start, end);
     project.addCut({ start, end, tokenRange });
     transcript.clearSelection();
     setSelectionBounds(null);
@@ -483,6 +479,7 @@ function setup(): void {
 
   // --- open: audio file or .audioedit.json project ---
   const loadAudio = async (path: string): Promise<boolean> => {
+    loadGeneration++; // any in-flight job for the previous file is now stale
     fileName.textContent = "กำลังโหลดและถอดรหัสเสียง…";
     playBtn.disabled = true;
     zoomSlider.disabled = true;
@@ -636,6 +633,7 @@ function setup(): void {
     if (project?.dirty && !window.confirm("มีการแก้ที่ยังไม่ได้บันทึก เริ่มงานใหม่เลยไหม?")) {
       return;
     }
+    loadGeneration++; // invalidate any in-flight job's result
     project = null;
     currentPath = null;
     selection = null;
@@ -768,11 +766,12 @@ function setup(): void {
   );
 
   // --- transcription + script alignment (share one job-tracking path) ---
-  const adoptResult = (audioPath: string, result: TranscribeResult) => {
+  const adoptResult = (gen: number, audioPath: string, result: TranscribeResult) => {
     // A transcription/align job that finishes AFTER the user opened another
-    // file (or hit งานใหม่) must not overwrite the now-current project with a
-    // stale result (Codex review #7).
-    if (currentPath !== audioPath) return;
+    // file or hit งานใหม่ must not land on the current project. Compare the
+    // load generation captured when the job started, not just the path — that
+    // also rejects the A→other→A reopen case (Codex re-review #2).
+    if (gen !== loadGeneration || currentPath !== audioPath) return;
     // carry rough pre-transcription cuts (as pure time cuts) forward
     const carriedCuts = project && project.audioPath === audioPath ? [...project.edl] : [];
     project = new Project(audioPath, result);
@@ -849,12 +848,13 @@ function setup(): void {
   transcribeBtn.addEventListener("click", async () => {
     if (!currentPath) return;
     const audioPath = currentPath;
+    const gen = loadGeneration;
     transcribeBtn.disabled = true;
     transcriptEl.textContent = "กำลังส่งงานถอดเสียง…";
     try {
       const jobId = await startTranscribe(audioPath);
       trackJob(jobId, transcribeBtn, "ถอดเสียง (ฉบับร่าง)", "ถอดเสียง", transcriptEl, (r) =>
-        adoptResult(audioPath, r as TranscribeResult),
+        adoptResult(gen, audioPath, r as TranscribeResult),
       );
     } catch (err) {
       transcriptEl.textContent = `ถอดเสียงไม่สำเร็จ: ${String(err)}`;
@@ -865,6 +865,7 @@ function setup(): void {
   alignScriptBtn.addEventListener("click", async () => {
     if (!currentPath) return;
     const audioPath = currentPath;
+    const gen = loadGeneration;
     const scriptPath = await open({
       multiple: false,
       directory: false,
@@ -876,7 +877,7 @@ function setup(): void {
     try {
       const jobId = await startAlignScript(audioPath, scriptPath);
       trackJob(jobId, alignScriptBtn, "ตรึงบท (มีบทแล้ว)", "ตรึงบท", transcriptEl, (r) =>
-        adoptResult(audioPath, r as TranscribeResult),
+        adoptResult(gen, audioPath, r as TranscribeResult),
       );
     } catch (err) {
       transcriptEl.textContent = `ตรึงบทไม่สำเร็จ: ${String(err)}`;

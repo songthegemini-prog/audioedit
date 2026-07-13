@@ -346,6 +346,31 @@
 - ยังไม่ทำ (latent จริง): #11 ถอด global listener ตอน destroy — view เป็น
   singleton ไม่ remount จึงยังไม่กระทบ; ทำเมื่อมีการ reinit UI
 
+## 28. Codex review รอบสอง (re-review) — ปิดช่องที่การแก้รอบแรกยังไม่ครบ
+
+Codex รีวิวการแก้เอง เจอว่า 3 จุดยังไม่ถึงราก (มันถูก) — แก้เพิ่ม:
+
+- **resize cut ยัง inconsistent (regression ที่เพิ่งสร้าง):** ใช้ "token ทั้งคำ
+  ต้องอยู่ใน cut" → ขยับขอบ 10ms เข้าไปในคำ คำหลุด tokenRange กลับเข้า .docx
+  ทั้งที่เสียงหายเกือบหมด. แก้: `tokensInSpan` ใช้ **จุดกึ่งกลางคำ** (midpoint)
+  — คำถูกตัดถ้ากลางคำอยู่ในช่วง cut; ใช้กติกาเดียวกันทั้ง create + resize.
+  เทสต์: nudge 10ms, ขยาย cut, ผ่านกลางคำ. `src/project.ts` + `main.ts`
+- **ABA race (A→ไฟล์อื่น→A):** path check ผ่านได้ถ้ากลับมาเปิดไฟล์เดิม. แก้:
+  ใช้ `loadGeneration` counter (เพิ่มทุก load/งานใหม่) job จับ gen ตอนเริ่มแล้ว
+  bail ถ้า gen ขยับ. `src/main.ts`
+- **JobStore prune เฉพาะตอน submit:** ยิง 100 งานพร้อมกัน (active หมด) →
+  จบครบแล้วไม่มี submit → ค้าง 100. แก้: prune ใน `finally` ของ `_run` ด้วย
+  → หน่วยความจำคงที่จริง. เทสต์ lifecycle จริง. `backend/app/jobs.py`
+- **orphan cache recovery พังบน Windows:** ใช้ `rename()` (fail ถ้าปลายทางมี
+  อยู่). แก้: `replace()` ทั้ง WAV+peaks + เขียน peaks ลง .part ก่อน replace
+  (atomic ทั้งคู่). เทสต์ recover จริง. `backend/app/longfile.py`
+- **export temp ชื่อชนกัน:** `<out>.part` คงที่ → เพิ่ม uuid. `render.py`
+- เพิ่มเทสต์ตามที่ Codex ชี้: partial-token resize, JobStore lifecycle,
+  orphan re-prepare, export replace/error, playback overlap (แยก `skipTarget`
+  เป็น pure fn + เทสต์ 6 เคส)
+- **บทเรียน:** ให้ reviewer เดิม "รีวิวการแก้" ด้วย — จับ regression ที่คนแก้
+  สร้างเอง (whole-token→midpoint) และ over-claim ("RAM flat") ได้
+
 ## เช็คลิสต์สุขภาพระบบ (เมื่อ "ปุ่มกดไม่ได้/ไม่มีอะไรเกิดขึ้น")
 
 1. Status bar ล่างซ้ายเขียวไหม? แดง = backend ไม่รัน →

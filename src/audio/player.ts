@@ -18,6 +18,21 @@ const CUT_COLOR = "rgba(248, 81, 73, 0.28)";
 const SELECTION_COLOR = "rgba(80, 140, 255, 0.28)";
 const SELECTION_ID = "selection";
 
+/** When playback reaches time `t`, the time to jump to so cut audio is
+ * skipped — or null if `t` isn't inside any cut. Jumps past the WHOLE run of
+ * overlapping/adjacent cuts so no sliver of a merged cut plays for a frame,
+ * matching the merged export (Codex #8). Pure, so it's unit-tested. */
+export function skipTarget(cuts: readonly Cut[], t: number): number | null {
+  const hit = cuts.find((c) => t >= c.start && t < c.end);
+  if (!hit) return null;
+  let end = hit.end;
+  for (;;) {
+    const next = cuts.find((c) => end >= c.start && end < c.end);
+    if (!next) return end;
+    end = next.end;
+  }
+}
+
 /** Map a 0–100 slider value onto a log scale between MIN and MAX px/sec. */
 export function sliderToPxPerSec(value: number): number {
   const clamped = Math.min(100, Math.max(0, value));
@@ -122,18 +137,9 @@ export class AudioPlayer {
         this.ws.pause();
       }
       if (this.skipCuts && this.ws.isPlaying()) {
-        const hit = this.skipCuts.find((c) => t >= c.start && t < c.end);
-        if (hit) {
-          // jump past the WHOLE merged run of overlapping/adjacent cuts, not
-          // just this one — otherwise a sliver inside the next cut plays for a
-          // frame, so playback wouldn't match the (merged) export (Codex #8)
-          let end = hit.end;
-          for (;;) {
-            const next = this.skipCuts.find((c) => end >= c.start && end < c.end);
-            if (!next) break;
-            end = next.end;
-          }
-          const target = end + 0.001;
+        const skipTo = skipTarget(this.skipCuts, t);
+        if (skipTo !== null) {
+          const target = skipTo + 0.001;
           if (target >= this.duration - 0.02) {
             // the cut reaches the file end — stop here instead of seeking past
             // the end (which flips the player to "ended" and the next play
