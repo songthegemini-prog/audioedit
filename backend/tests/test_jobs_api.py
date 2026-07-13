@@ -64,20 +64,45 @@ def wait_for_done(client: TestClient, job_id: str, timeout: float = 5.0) -> dict
 
 
 def test_jobstore_prunes_old_finished_jobs_but_keeps_running() -> None:
+    import time
+
     from app.jobs import Job, JobStatus
 
     store = JobStore(FakeEngine())
-    # fill past the cap with already-finished jobs + one still "running"
+    old = time.monotonic() - store.PRUNE_GRACE_SEC - 1  # finished long ago
     running = Job(id="run", path=Path("."), status=JobStatus.RUNNING)
     store._jobs["run"] = running
     for i in range(JobStore.MAX_KEPT_JOBS + 10):
         store._jobs[f"done{i}"] = Job(
-            id=f"done{i}", path=Path("."), status=JobStatus.DONE
+            id=f"done{i}", path=Path("."), status=JobStatus.DONE, finished_at=old
         )
     store._prune_locked()
     assert len(store._jobs) <= JobStore.MAX_KEPT_JOBS
     assert "run" in store._jobs  # active job must survive pruning
     assert "done0" not in store._jobs  # oldest finished dropped first
+
+
+def test_just_finished_job_survives_prune_within_grace() -> None:
+    # Codex re-review #2: a job that just finished must NOT be pruned before the
+    # client can poll it, even when the store is over the cap.
+    import time
+
+    from app.jobs import Job, JobStatus
+
+    store = JobStore(FakeEngine())
+    old = time.monotonic() - store.PRUNE_GRACE_SEC - 1
+    for i in range(JobStore.MAX_KEPT_JOBS + 5):
+        store._jobs[f"old{i}"] = Job(
+            id=f"old{i}", path=Path("."), status=JobStatus.DONE, finished_at=old
+        )
+    fresh = Job(
+        id="fresh", path=Path("."), status=JobStatus.DONE,
+        finished_at=time.monotonic(), result={"ok": True},
+    )
+    store._jobs["fresh"] = fresh
+    store._prune_locked()
+    assert store.get("fresh") is not None  # still observable
+    assert store.get("fresh").result == {"ok": True}
 
 
 def test_jobstore_prunes_as_jobs_finish_without_new_submit(tmp_path: Path) -> None:
@@ -87,15 +112,15 @@ def test_jobstore_prunes_as_jobs_finish_without_new_submit(tmp_path: Path) -> No
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"fake")
     store = JobStore(FakeEngine(), duration_fn=lambda p: 60.0)
+    store.PRUNE_GRACE_SEC = 0.0  # no grace → prune finished jobs immediately
     n = JobStore.MAX_KEPT_JOBS + 15
     ids = [store.submit(audio).id for _ in range(n)]
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
-        if all(
-            (j := store.get(i)) is None
-            or j.status in ("done", "error", "cancelled")
-            for i in ids
-        ):
+        with store._jobs_lock:
+            small_enough = len(store._jobs) <= JobStore.MAX_KEPT_JOBS
+        last = store.get(ids[-1])
+        if small_enough and last is not None and last.status == "done":
             break
         time.sleep(0.02)
     with store._jobs_lock:

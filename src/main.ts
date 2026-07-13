@@ -288,9 +288,12 @@ function setup(): void {
     // user dragged them (user adjustments are respected, never re-snapped).
     const { start, end } = selectionBounds;
     if (end - start < 0.01) return; // nothing meaningful to cut
-    // token range: the words selected, else whichever words the time range
-    // covers — same midpoint rule a resize uses, so create/resize agree
-    const tokenRange = selection ?? project.tokensInSpan(start, end);
+    // ALWAYS derive tokenRange from the final cut bounds, never from the stale
+    // token `selection` — the user may have dragged the selection edge on the
+    // waveform/spectrogram after picking words, moving the bounds away from
+    // those tokens. Deriving from bounds (same midpoint rule as resize) keeps
+    // audio and .docx consistent on every create path (Codex re-review #1).
+    const tokenRange = project.tokensInSpan(start, end);
     project.addCut({ start, end, tokenRange });
     transcript.clearSelection();
     setSelectionBounds(null);

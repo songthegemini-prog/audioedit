@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -41,6 +42,7 @@ class Job:
     result: dict | None = None
     error: str | None = None
     cancelled: bool = False
+    finished_at: float | None = None  # monotonic time it reached a terminal state
 
     def check_cancelled(self) -> None:
         if self.cancelled:
@@ -103,6 +105,10 @@ class JobStore:
     # tens of thousands of tokens, so don't retain every finished job forever
     # (Codex review — JobStore had no pruning)
     MAX_KEPT_JOBS = 40
+    # a finished job must stay readable long enough for the frontend's ~1s poll
+    # to observe its result before it can be pruned — otherwise /jobs/{id} 404s
+    # and the UI shows "failed" for a job that succeeded (Codex re-review #2)
+    PRUNE_GRACE_SEC = 30.0
 
     def _submit(self, job: Job) -> Job:
         with self._jobs_lock:
@@ -112,17 +118,19 @@ class JobStore:
         return job
 
     def _prune_locked(self) -> None:
-        """Drop the oldest FINISHED jobs once we exceed the cap. Active jobs
-        (queued/running) are always kept. Caller holds _jobs_lock."""
+        """Drop the oldest finished jobs once over the cap, but never one that
+        finished within the grace window (the client may not have polled its
+        result yet). Active jobs are always kept. Caller holds _jobs_lock."""
         if len(self._jobs) <= self.MAX_KEPT_JOBS:
             return
-        finished = [
+        now = time.monotonic()
+        prunable = [
             jid
             for jid, j in self._jobs.items()
-            if j.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED)
+            if j.finished_at is not None and now - j.finished_at >= self.PRUNE_GRACE_SEC
         ]
-        # dict preserves insertion order → oldest first
-        for jid in finished[: len(self._jobs) - self.MAX_KEPT_JOBS]:
+        prunable.sort(key=lambda jid: self._jobs[jid].finished_at or 0.0)  # oldest first
+        for jid in prunable[: len(self._jobs) - self.MAX_KEPT_JOBS]:
             del self._jobs[jid]
 
     def get(self, job_id: str) -> Job | None:
@@ -150,10 +158,11 @@ class JobStore:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.status = JobStatus.ERROR
             finally:
-                # prune here too, not only on submit — a burst of jobs may all
-                # be active when submitted (so nothing pruned then); pruning as
-                # each one finishes keeps memory flat without a later submit
-                # (Codex re-review #3)
+                # mark the finish time, then prune here too (not only on submit)
+                # — a burst that all finishes without a later submit still stays
+                # bounded; the grace window keeps just-finished results readable
+                # (Codex re-review #2/#3)
+                job.finished_at = time.monotonic()
                 with self._jobs_lock:
                     self._prune_locked()
 
