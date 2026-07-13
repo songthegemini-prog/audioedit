@@ -99,11 +99,31 @@ class JobStore:
         job.cancelled = True
         return True
 
+    # keep memory flat across a long session: a transcription result can hold
+    # tens of thousands of tokens, so don't retain every finished job forever
+    # (Codex review — JobStore had no pruning)
+    MAX_KEPT_JOBS = 40
+
     def _submit(self, job: Job) -> Job:
         with self._jobs_lock:
             self._jobs[job.id] = job
+            self._prune_locked()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
+
+    def _prune_locked(self) -> None:
+        """Drop the oldest FINISHED jobs once we exceed the cap. Active jobs
+        (queued/running) are always kept. Caller holds _jobs_lock."""
+        if len(self._jobs) <= self.MAX_KEPT_JOBS:
+            return
+        finished = [
+            jid
+            for jid, j in self._jobs.items()
+            if j.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED)
+        ]
+        # dict preserves insertion order → oldest first
+        for jid in finished[: len(self._jobs) - self.MAX_KEPT_JOBS]:
+            del self._jobs[jid]
 
     def get(self, job_id: str) -> Job | None:
         with self._jobs_lock:

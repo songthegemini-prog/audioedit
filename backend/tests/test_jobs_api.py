@@ -63,6 +63,23 @@ def wait_for_done(client: TestClient, job_id: str, timeout: float = 5.0) -> dict
     raise AssertionError("job did not finish in time")
 
 
+def test_jobstore_prunes_old_finished_jobs_but_keeps_running() -> None:
+    from app.jobs import Job, JobStatus
+
+    store = JobStore(FakeEngine())
+    # fill past the cap with already-finished jobs + one still "running"
+    running = Job(id="run", path=Path("."), status=JobStatus.RUNNING)
+    store._jobs["run"] = running
+    for i in range(JobStore.MAX_KEPT_JOBS + 10):
+        store._jobs[f"done{i}"] = Job(
+            id=f"done{i}", path=Path("."), status=JobStatus.DONE
+        )
+    store._prune_locked()
+    assert len(store._jobs) <= JobStore.MAX_KEPT_JOBS
+    assert "run" in store._jobs  # active job must survive pruning
+    assert "done0" not in store._jobs  # oldest finished dropped first
+
+
 def test_transcribe_rejects_missing_file() -> None:
     client = make_client()
     res = client.post("/transcribe", json={"path": "/no/such/file.wav"})

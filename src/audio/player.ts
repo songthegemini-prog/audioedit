@@ -124,7 +124,16 @@ export class AudioPlayer {
       if (this.skipCuts && this.ws.isPlaying()) {
         const hit = this.skipCuts.find((c) => t >= c.start && t < c.end);
         if (hit) {
-          const target = hit.end + 0.001;
+          // jump past the WHOLE merged run of overlapping/adjacent cuts, not
+          // just this one — otherwise a sliver inside the next cut plays for a
+          // frame, so playback wouldn't match the (merged) export (Codex #8)
+          let end = hit.end;
+          for (;;) {
+            const next = this.skipCuts.find((c) => end >= c.start && end < c.end);
+            if (!next) break;
+            end = next.end;
+          }
+          const target = end + 0.001;
           if (target >= this.duration - 0.02) {
             // the cut reaches the file end — stop here instead of seeking past
             // the end (which flips the player to "ended" and the next play

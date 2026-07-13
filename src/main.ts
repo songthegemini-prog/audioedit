@@ -135,15 +135,20 @@ function setup(): void {
     // แก้ทั้งวรรค: re-align the free-typed text within the segment's time range
     onSegmentText: async (segIndex, text) => {
       if (!project || !currentPath) return;
+      const proj = project; // guard against a file switch during the await
       const seg = project.transcription.segments[segIndex];
       try {
         const res = await realign(currentPath, text, seg.start, seg.end);
+        // if the user opened another file / งานใหม่ mid-realign, this result
+        // belongs to the old project — drop it (Codex review #4)
+        if (project !== proj) return;
         project.replaceSegment(segIndex, res.text, res.tokens);
         transcript.render(project);
         afterEdlChange();
         updateReviewCount();
         runSearch(false);
       } catch (err) {
+        if (project !== proj) return; // stale failure for a closed project
         transcript.render(project); // restore the old segment
         fileName.textContent = `ตรึงวรรคไม่สำเร็จ: ${String(err)}`;
       }
@@ -264,6 +269,17 @@ function setup(): void {
 
   const cutSelection = () => {
     if (!project || !selectionBounds) return;
+    // Cutting from a TOKEN selection relies on the word's time being accurate;
+    // if alignment hasn't run (timestamps === "rough") those times are
+    // unreliable and CLAUDE.md forbids cutting from them. A direct waveform
+    // drag (selection === null) is fine — the user is looking at real audio
+    // (Codex review #3).
+    if (selection && project.transcription.timestamps === "rough") {
+      fileName.textContent =
+        "เวลาคำยังเป็นแบบหยาบ (ยังไม่ผ่าน alignment) — ตัดจากการเลือกคำยังไม่ได้ " +
+        "ให้ลากเลือกบน waveform โดยตรง หรือถอดเสียง/ตรึงบทใหม่ก่อน";
+      return;
+    }
     // The bounds are exactly what the blue region shows — snapped, or as the
     // user dragged them (user adjustments are respected, never re-snapped).
     const { start, end } = selectionBounds;
@@ -753,6 +769,10 @@ function setup(): void {
 
   // --- transcription + script alignment (share one job-tracking path) ---
   const adoptResult = (audioPath: string, result: TranscribeResult) => {
+    // A transcription/align job that finishes AFTER the user opened another
+    // file (or hit งานใหม่) must not overwrite the now-current project with a
+    // stale result (Codex review #7).
+    if (currentPath !== audioPath) return;
     // carry rough pre-transcription cuts (as pure time cuts) forward
     const carriedCuts = project && project.audioPath === audioPath ? [...project.edl] : [];
     project = new Project(audioPath, result);
@@ -781,15 +801,22 @@ function setup(): void {
   ) => {
     activeJobId = jobId;
     cancelJobBtn.hidden = false;
+    let finished = false; // setInterval(async) can overlap ticks — fire once
     const finish = () => {
+      finished = true;
       activeJobId = null;
       cancelJobBtn.hidden = true;
       btn.textContent = idleLabel;
       refreshButtons();
     };
     const poll = window.setInterval(async () => {
+      if (finished) {
+        window.clearInterval(poll);
+        return;
+      }
       try {
         const job = await getJob(jobId);
+        if (finished) return; // a sibling tick already finished this job (#6)
         if (job.status === "queued" || job.status === "running") {
           const pct = Math.round(job.progress * 100);
           progressEl.textContent = `กำลัง${verb}… ${pct}%`;

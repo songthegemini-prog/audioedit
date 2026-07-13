@@ -326,6 +326,26 @@
 - **บทเรียน:** ให้ agent ตัวอื่น review แบบ read-only เป็นระยะ — จับ edge case/
   race ที่คนเขียนเองมองข้าม (คู่กับ AGENTS.md ที่ให้กติกาเดียวกัน)
 
+## 27. บั๊กจาก Codex review รอบสอง (2026-07-12) — race/guard/หน่วยความจำ
+
+แก้กลุ่มที่เหลือจากรีวิวเดียวกัน (โอกาสเกิดต่ำแต่เป็น correctness/robustness):
+
+- **(Codex#3) ตัดจาก rough Whisper timestamp ได้:** `cutSelection` บล็อกเมื่อ
+  เลือกแบบ token (`selection` ไม่ null) และ `timestamps === "rough"` — แต่ยัง
+  อนุญาตลากบน waveform โดยตรง (ผู้ใช้ดูเสียงจริง). `src/main.ts`
+- **(Codex#4/#7) ผลงานเก่า apply ผิดไฟล์:** `adoptResult` เช็ค
+  `currentPath === audioPath`; `realign` จับ project identity ก่อน await แล้ว
+  bail ถ้าเปลี่ยน — กันผลถอด/ตรึงที่เสร็จช้าหลังเปิดไฟล์ใหม่/งานใหม่. `src/main.ts`
+- **(Codex#6) onDone ยิงซ้ำ:** `setInterval(async)` overlap ได้ → เพิ่ม flag
+  `finished` กัน onDone ทำงานเกินครั้งเดียว. `src/main.ts`
+- **(Codex#8) playback ข้าม cut ซ้อนกันไม่ครบ:** วน merge run ของ cut ที่
+  ต่อเนื่อง/ซ้อน แล้วกระโดดทีเดียว → preview ตรงกับ export (ที่ merge แล้ว).
+  `src/audio/player.ts`
+- **(Codex JobStore) RAM โตตามจำนวนงาน:** prune job ที่เสร็จแล้วเมื่อเกิน 40
+  (เก็บงานที่ยังรันไว้เสมอ). `backend/app/jobs.py`
+- ยังไม่ทำ (latent จริง): #11 ถอด global listener ตอน destroy — view เป็น
+  singleton ไม่ remount จึงยังไม่กระทบ; ทำเมื่อมีการ reinit UI
+
 ## เช็คลิสต์สุขภาพระบบ (เมื่อ "ปุ่มกดไม่ได้/ไม่มีอะไรเกิดขึ้น")
 
 1. Status bar ล่างซ้ายเขียวไหม? แดง = backend ไม่รัน →
