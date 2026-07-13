@@ -71,6 +71,7 @@ class JobStore:
         self._jobs: dict[str, Job] = {}
         self._jobs_lock = threading.Lock()
         self._run_lock = threading.Lock()  # one transcription at a time
+        self._maintenance_started = False
 
     def submit(self, path: Path) -> Job:
         return self._submit(Job(id=uuid.uuid4().hex, path=path))
@@ -114,8 +115,24 @@ class JobStore:
         with self._jobs_lock:
             self._jobs[job.id] = job
             self._prune_locked()
+            if not self._maintenance_started:
+                self._maintenance_started = True
+                threading.Thread(target=self._maintenance_loop, daemon=True).start()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
+
+    def run_maintenance(self) -> None:
+        """Periodic cleanup so a burst of jobs that ALL finish within the grace
+        window is still pruned once grace expires, even with no further submit
+        (a submit/finish is otherwise the only thing that prunes — Codex
+        re-review #2). Exposed so tests can drive it deterministically."""
+        with self._jobs_lock:
+            self._prune_locked()
+
+    def _maintenance_loop(self) -> None:
+        while True:
+            time.sleep(max(1.0, self.PRUNE_GRACE_SEC))
+            self.run_maintenance()
 
     def _prune_locked(self) -> None:
         """Drop the oldest finished jobs once over the cap, but never one that
