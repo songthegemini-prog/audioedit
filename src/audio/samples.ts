@@ -37,8 +37,8 @@ export class MemorySamples implements SampleProvider {
   }
 
   async getWindow(startSec: number, endSec: number): Promise<SampleWindow> {
-    const from = Math.max(0, Math.round(startSec * this.sampleRate));
-    const to = Math.min(this.data.length, Math.round(endSec * this.sampleRate));
+    const from = Math.max(0, Math.floor(startSec * this.sampleRate));
+    const to = Math.min(this.data.length, Math.ceil(endSec * this.sampleRate));
     return {
       data: this.data.subarray(from, Math.max(from, to)),
       startSec: from / this.sampleRate,

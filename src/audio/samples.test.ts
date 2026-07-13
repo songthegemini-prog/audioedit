@@ -34,6 +34,17 @@ describe("MemorySamples", () => {
     expect(past.data.length).toBe(0.5 * SR);
     expect(mem.durationSec).toBe(3);
   });
+
+  it("covers fractional-sample request boundaries", async () => {
+    const data = Float32Array.from({ length: 3 * SR }, (_, i) => i);
+    const mem = new MemorySamples(data, SR);
+    const startSec = 1.0006;
+    const endSec = 1.9994;
+    const w = await mem.getWindow(startSec, endSec);
+
+    expect(w.startSec).toBeLessThanOrEqual(startSec);
+    expect(w.startSec + w.data.length / w.sampleRate).toBeGreaterThanOrEqual(endSec);
+  });
 });
 
 describe("gridRange", () => {
