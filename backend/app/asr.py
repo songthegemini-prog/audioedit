@@ -53,12 +53,26 @@ class FasterWhisperEngine:
                     f"ASR model not found at {path} — run: "
                     ".venv/bin/python scripts/fetch_model.py"
                 )
-            model = WhisperModel(
-                str(path),
-                device=config.device(),
-                compute_type=config.compute_type(),
-                cpu_threads=config.cpu_threads(),
-            )
+            want = config.device()
+            try:
+                model = WhisperModel(
+                    str(path),
+                    device=want,
+                    compute_type=config.compute_type(),
+                    cpu_threads=config.cpu_threads(),
+                )
+            except (RuntimeError, OSError):
+                # A GPU device that can't load its CUDA libraries (e.g.
+                # cublas64_12.dll missing) must not kill transcription —
+                # fall back to CPU so the app still works everywhere.
+                if want == "cpu":
+                    raise
+                model = WhisperModel(
+                    str(path),
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=config.cpu_threads(),
+                )
             # Batches VAD-detected speech chunks through the model together —
             # several times faster than sequential decoding on the same CPU.
             self._pipeline = BatchedInferencePipeline(model=model)

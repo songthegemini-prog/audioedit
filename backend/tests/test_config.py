@@ -31,3 +31,15 @@ def test_tuning_envs_have_sane_defaults() -> None:
     assert config.beam_size() == 2
     assert config.batch_size() == 8
     assert config.cpu_threads() == 0
+
+
+def test_device_defaults_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    # FIXES.md #33: "auto" made CTranslate2 load cublas64_12.dll and crash
+    # Windows machines without a CUDA runtime. Default must be plain CPU.
+    monkeypatch.delenv("AUDIOEDIT_DEVICE", raising=False)
+    assert config.device() == "cpu"
+
+
+def test_device_env_can_opt_into_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUDIOEDIT_DEVICE", "cuda")
+    assert config.device() == "cuda"

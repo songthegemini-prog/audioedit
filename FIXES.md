@@ -432,6 +432,22 @@ Codex รีวิวการแก้เอง เจอว่า 3 จุด�
   `console=False` ห้าม assume ว่ามี stdout/stderr — ทดสอบ Windows build จริง
   ทุกครั้งที่แตะการบูตของ sidecar
 
+## 33. Windows: ถอดเสียงไม่สำเร็จ "cublas64_12.dll is not found" (รายงานจากทีม)
+
+- **อาการ:** เครื่อง Windows กดถอดเสียงแล้วขึ้น
+  `RuntimeError: Library cublas64_12.dll is not found or cannot be loaded`
+- **สาเหตุ:** `config.device()` ตั้ง default = `"auto"` → CTranslate2
+  (เครื่องยนต์ของ faster-whisper) ไปตรวจหาการ์ดจอ NVIDIA แล้วพยายามโหลด
+  ไลบรารี CUDA (`cublas64_12.dll`) ซึ่งเครื่องทั่วไปไม่มีและเราก็ไม่ได้แนบไป
+  (เราแนบโมเดล int8 สำหรับ CPU) — macOS ไม่เจอเพราะไม่มี CUDA path
+- **วิธีแก้:** เปลี่ยน default เป็น `"cpu"` (`config.py`); ถ้าใครตั้ง
+  `AUDIOEDIT_DEVICE=cuda` เองแต่โหลด CUDA ไม่ได้ `asr.py` จะ fallback มา
+  CPU (`compute_type=int8`) อัตโนมัติแทนที่จะพัง; aligner (torch) อยู่ CPU
+  อยู่แล้ว (ไม่มี `.to(cuda)`)
+- **กันเกิดซ้ำ:** `test_config.py::test_device_defaults_to_cpu` ล็อกค่า default;
+  กติกา: แอปนี้ต้องรันได้บนเครื่องไม่มี GPU เสมอ — GPU เป็น opt-in ผ่าน env
+  เท่านั้น ห้ามตั้ง `device="auto"` เป็น default อีก
+
 ## เช็คลิสต์สุขภาพระบบ (เมื่อ "ปุ่มกดไม่ได้/ไม่มีอะไรเกิดขึ้น")
 
 1. Status bar ล่างซ้ายเขียวไหม? แดง = backend ไม่รัน →

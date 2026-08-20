@@ -61,4 +61,8 @@ def compute_type() -> str:
 
 
 def device() -> str:
-    return os.environ.get("AUDIOEDIT_DEVICE", "auto")
+    # Default CPU: the app ships int8 CPU models and runs on ordinary
+    # machines (no NVIDIA GPU). "auto" made CTranslate2 probe for CUDA and
+    # try to load cublas64_12.dll, which crashes Windows boxes without the
+    # CUDA runtime. Users with a GPU opt in via AUDIOEDIT_DEVICE=cuda.
+    return os.environ.get("AUDIOEDIT_DEVICE", "cpu")
