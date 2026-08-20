@@ -306,8 +306,12 @@ def test_export_docx_writes_paragraphs(tmp_path: Path) -> None:
 def test_models_status_shape() -> None:
     client = make_client()
     body = client.get("/models_status").json()
-    assert set(body) == {"asr", "align", "dataDir"}
+    # modelsDir/modelsBytes were added so the app can tell the user where the
+    # 4.4GB lives and offer to delete it (team feedback 2026-08-20).
+    assert set(body) == {"asr", "align", "dataDir", "modelsDir", "modelsBytes"}
     assert isinstance(body["asr"], bool) and isinstance(body["align"], bool)
+    assert isinstance(body["modelsDir"], str)
+    assert isinstance(body["modelsBytes"], int)
 
 
 def test_download_models_job(monkeypatch) -> None:

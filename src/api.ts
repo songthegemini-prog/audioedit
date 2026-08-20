@@ -34,11 +34,48 @@ export interface TranscribeResult {
   alignError: string | null;
 }
 
+export type ExportFormat = "wav" | "mp3";
+
 export interface ExportAudioResult {
   out_path: string;
   duration: number;
   sample_rate: number;
   channels: number;
+  format: ExportFormat;
+  /** null for mp3 — bit depth is meaningless for a lossy codec. */
+  bits: number | null;
+  source_bits: number;
+  source_codec: string;
+}
+
+/** Peak/RMS of one file, optionally measured through an EDL. */
+export interface Loudness {
+  peak: number;
+  peak_dbfs: number;
+  rms: number;
+  rms_dbfs: number;
+  duration: number;
+  sample_rate: number;
+  channels: number;
+  frames: number;
+  clipped_samples: number;
+}
+
+export interface LoudnessComparison {
+  source: Loudness;
+  edited: Loudness;
+  rms_delta_db: number;
+  /** Measured against what the output format could actually reach, not the
+   * raw source peak — a decoded mp3 often exceeds full scale. */
+  peak_delta_db: number;
+  source_over_full_scale: boolean;
+  source_peak_dbfs_raw: number;
+  sample_rate_match: boolean;
+  channels_match: boolean;
+  new_clipping: boolean;
+  unchanged: boolean;
+  rms_tolerance_db: number;
+  peak_tolerance_db: number;
 }
 
 export interface JobState {
@@ -71,6 +108,9 @@ export interface ModelsStatus {
   asr: boolean;
   align: boolean;
   dataDir: string;
+  /** Where the ~4.4GB actually lives — shown so uninstalling is not a mystery. */
+  modelsDir: string;
+  modelsBytes: number;
 }
 
 export async function modelsStatus(): Promise<ModelsStatus | null> {
@@ -84,6 +124,17 @@ export async function modelsStatus(): Promise<ModelsStatus | null> {
 }
 
 /** First-run installer: download both AI models (~4.4GB, job). */
+/** Delete the downloaded models to reclaim disk. Scoped to the folder the
+ * app created — a custom AUDIOEDIT_MODEL_DIR is never touched. */
+export async function deleteModels(): Promise<{ deleted: boolean; freedBytes: number }> {
+  const res = await fetch(`${apiBase()}/delete_models`, { method: "POST" });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
 export async function startDownloadModels(): Promise<string> {
   const res = await fetch(`${apiBase()}/download_models`, { method: "POST" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -130,22 +181,84 @@ export interface RealignResponse {
   tokens: Token[];
 }
 
-/** Render the EDL into a NEW wav file (job). The source is never modified. */
+/** Render the EDL into a NEW audio file (job). The source is never modified.
+ * WAV keeps the source's own bit depth unless `bits` overrides it. */
 export async function startExportAudio(
   path: string,
   outPath: string,
   edl: { start: number; end: number }[],
+  format: ExportFormat = "wav",
+  bits?: 16 | 24 | 32,
 ): Promise<string> {
   const res = await fetch(`${apiBase()}/export_audio`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, out_path: outPath, edl }),
+    body: JSON.stringify({ path, out_path: outPath, edl, format, bits: bits ?? null }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail;
     throw new Error(detail ?? `HTTP ${res.status}`);
   }
   return (await res.json()).job_id;
+}
+
+/** Peak/RMS of a file. Pass the project's EDL when measuring the SOURCE so
+ * the numbers describe the same audio as the export. */
+export async function analyzeAudio(
+  path: string,
+  edl: { start: number; end: number }[] = [],
+): Promise<Loudness> {
+  const res = await fetch(`${apiBase()}/analyze_audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, edl }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+/** Did the export preserve the source's energy? The check the editors run. */
+export async function compareAudio(
+  sourcePath: string,
+  editedPath: string,
+  edl: { start: number; end: number }[] = [],
+): Promise<LoudnessComparison> {
+  const res = await fetch(`${apiBase()}/compare_audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_path: sourcePath, edited_path: editedPath, edl }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+export interface PackedProject {
+  out_dir: string;
+  audio_name: string;
+  audio_path: string;
+  bytes: number;
+}
+
+/** Copy the source audio into a self-contained project folder. The caller
+ * then writes the .json beside it with a BARE FILENAME as audioPath — that
+ * is what lets the folder open on any machine. */
+export async function packProject(audioPath: string, outDir: string): Promise<PackedProject> {
+  const res = await fetch(`${apiBase()}/pack_project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio_path: audioPath, out_dir: outDir }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return await res.json();
 }
 
 /** Write the edited content as .docx (sync). */

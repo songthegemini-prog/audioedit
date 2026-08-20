@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,7 @@ from .asr import FasterWhisperEngine
 from .jobs import JobStore
 from .tokens import segment_words
 
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.2.0"
 
 # Only the Tauri webview may talk to this backend — it must never be
 # reachable from anywhere outside the local app.
@@ -58,16 +59,52 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": APP_VERSION}
 
 
+def _dir_size_bytes(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
 @app.get("/models_status")
 def models_status() -> dict:
-    """First-run check: are the AI models installed on this machine?"""
+    """First-run check: are the AI models installed on this machine?
+
+    Also reports where they live and how big they are. Uninstalling the app
+    deliberately LEAVES the models in place so an update does not re-download
+    4.4GB — but the team only discovered that by accident (feedback
+    2026-08-20), so the app now says it out loud and offers to delete them.
+    """
     from . import config
 
+    models_root = config.DATA_ROOT / "models"
     return {
         "asr": config.model_present(config.model_dir()),
         "align": config.model_present(config.align_model_dir()),
         "dataDir": str(config.DATA_ROOT),
+        "modelsDir": str(models_root),
+        "modelsBytes": _dir_size_bytes(models_root),
     }
+
+
+@app.post("/delete_models")
+def delete_models() -> dict:
+    """Remove the downloaded models to reclaim the disk they use.
+
+    Scoped to DATA_ROOT/models and nothing else: a custom AUDIOEDIT_MODEL_DIR
+    may point anywhere (including inside a repo checkout), and this endpoint
+    must never delete a folder the user pointed us at rather than one we
+    created.
+    """
+    import shutil
+
+    from . import config
+
+    models_root = config.DATA_ROOT / "models"
+    if not models_root.is_dir():
+        return {"deleted": False, "freedBytes": 0, "modelsDir": str(models_root)}
+    freed = _dir_size_bytes(models_root)
+    shutil.rmtree(models_root)
+    return {"deleted": True, "freedBytes": freed, "modelsDir": str(models_root)}
 
 
 @app.post("/download_models")
@@ -254,13 +291,18 @@ class ExportAudioRequest(BaseModel):
     path: str
     out_path: str
     edl: list[EdlCut]
+    # "wav" keeps the source's own bit depth (see app/audiofmt.py); "mp3" is a
+    # deliberately lossy hand-off format the team asked for.
+    format: Literal["wav", "mp3"] = "wav"
+    # None = match the source. Only meaningful for wav.
+    bits: Literal[16, 24, 32] | None = None
 
 
 @app.post("/export_audio")
 def export_audio(
     req: ExportAudioRequest, store: JobStore = Depends(get_job_store)
 ) -> dict[str, str]:
-    """Render the EDL into a NEW wav — the source file is never modified."""
+    """Render the EDL into a NEW audio file — the source is never modified."""
     path = Path(req.path).expanduser()
     out_path = Path(req.out_path).expanduser()
     if not path.is_file():
@@ -269,8 +311,104 @@ def export_audio(
         raise HTTPException(status_code=400, detail=f"no such folder: {out_path.parent}")
     if out_path.resolve() == path.resolve():
         raise HTTPException(status_code=400, detail="ห้ามเขียนทับไฟล์ต้นฉบับ")
-    job = store.submit_export(path, out_path, [(c.start, c.end) for c in req.edl])
+    job = store.submit_export(
+        path,
+        out_path,
+        [(c.start, c.end) for c in req.edl],
+        export_format=req.format,
+        export_bits=req.bits,
+    )
     return {"job_id": job.id}
+
+
+class AnalyzeRequest(BaseModel):
+    """Measure one file, optionally through an EDL.
+
+    To verify an export, call this TWICE: once with the source plus the
+    project's EDL, once with the exported file and no EDL. Comparing a source
+    against an export without the EDL always disagrees — the export is
+    deliberately shorter.
+    """
+
+    path: str
+    edl: list[EdlCut] = []
+
+
+@app.post("/analyze_audio")
+def analyze_audio(req: AnalyzeRequest) -> dict:
+    """Peak/RMS of a file, so the editors can prove we changed no levels."""
+    path = Path(req.path).expanduser()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    from .analyze import measure  # numpy/av import kept lazy
+
+    cuts = [(c.start, c.end) for c in req.edl]
+    return measure(path, cuts or None).as_dict()
+
+
+class CompareRequest(BaseModel):
+    source_path: str
+    edited_path: str
+    edl: list[EdlCut] = []
+
+
+@app.post("/compare_audio")
+def compare_audio(req: CompareRequest) -> dict:
+    """Full verdict: did the export preserve the source's energy?"""
+    source = Path(req.source_path).expanduser()
+    edited = Path(req.edited_path).expanduser()
+    for candidate in (source, edited):
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail=f"file not found: {candidate}")
+    from .analyze import compare, measure
+
+    cuts = [(c.start, c.end) for c in req.edl]
+    return compare(measure(source, cuts or None), measure(edited))
+
+
+class PackProjectRequest(BaseModel):
+    """Copy the source audio into a self-contained project folder.
+
+    Why a FOLDER and not a zip (team decision 2026-08-20): the audio is often
+    hundreds of MB, and a zip would have to be extracted before the app could
+    open it. A folder can be opened straight away, and the team zips it
+    themselves when they need to send it.
+    """
+
+    audio_path: str
+    out_dir: str
+
+
+@app.post("/pack_project")
+def pack_project(req: PackProjectRequest) -> dict:
+    """Create `out_dir` and copy the source audio into it, unchanged.
+
+    Only the audio moves here — the caller writes the .json beside it with a
+    BARE FILENAME as audioPath, which is what makes the folder portable.
+    """
+    import shutil
+
+    audio = Path(req.audio_path).expanduser()
+    out_dir = Path(req.out_dir).expanduser()
+    if not audio.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {audio}")
+    if out_dir.exists() and not out_dir.is_dir():
+        raise HTTPException(status_code=400, detail=f"มีไฟล์ชื่อนี้อยู่แล้ว: {out_dir}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = out_dir / audio.name
+    # Copying a file onto itself truncates it — that would destroy the very
+    # source we are trying to package (CLAUDE.md: never modify the source).
+    if destination.resolve() == audio.resolve():
+        raise HTTPException(status_code=400, detail="ปลายทางเป็นไฟล์ต้นฉบับเอง")
+    shutil.copy2(audio, destination)
+
+    return {
+        "out_dir": str(out_dir),
+        "audio_name": audio.name,
+        "audio_path": str(destination),
+        "bytes": destination.stat().st_size,
+    }
 
 
 class ExportDocxRequest(BaseModel):

@@ -276,12 +276,24 @@ def render_export(
     cuts: list[tuple[float, float]],
     on_progress: Callable[[float], None] | None = None,
     check_cancelled: Callable[[], None] | None = None,
+    fmt: str = "wav",
+    bits: int | None = None,
+    mp3_bitrate: int = 192_000,
 ) -> dict:
-    """Stream source → EDL → 16-bit WAV with constant memory.
+    """Stream source → EDL → WAV or MP3 with constant memory.
+
+    The output keeps the SOURCE's bit depth (16/24/32) unless `fmt="mp3"`:
+    the team verifies exports against the source in an analyser, and silently
+    downgrading a 24-bit master to 16-bit read as "the app changed my audio"
+    (see app/audiofmt.py). Pass `bits` to override.
 
     Writes to a temp file and renames on success, so a cancel/error never
     leaves a truncated output and never destroys an existing file at out_path
     (Codex review #10)."""
+    from .audiofmt import Mp3Writer, WavWriter, probe_format
+
+    source_format = probe_format(source)
+    out_bits = bits or source_format.bits
     chunks, sample_rate, est_duration = decode_stream(source)
     # unique temp so two exports to the same destination can't share a .part
     # (Codex re-review #5); atomically replaced onto out_path on success
@@ -301,24 +313,25 @@ def render_export(
 
     frames_written = 0
     channels = 0
-    writer: wave.Wave_write | None = None
+    writer: WavWriter | Mp3Writer | None = None
+
+    def open_writer(nchannels: int) -> WavWriter | Mp3Writer:
+        if fmt == "mp3":
+            return Mp3Writer(tmp_path, sample_rate, nchannels, mp3_bitrate)
+        return WavWriter(tmp_path, sample_rate, nchannels, out_bits)
+
     try:
         for block in stream_edl(tracked(), sample_rate, cuts):
             if writer is None:
                 channels = block.shape[1]
-                writer = wave.open(str(tmp_path), "wb")
-                writer.setnchannels(channels)
-                writer.setsampwidth(2)  # 16-bit PCM
-                writer.setframerate(sample_rate)
-            writer.writeframes(_to_int16(block).tobytes())
+                writer = open_writer(channels)
+            writer.write(block)
             frames_written += len(block)
-        if writer is None:  # everything cut — still produce a valid empty WAV
+        if writer is None:  # everything cut — still produce a valid empty file
             if consumed == 0:
                 raise ValueError(f"no audio decoded from {source}")
-            writer = wave.open(str(tmp_path), "wb")
-            writer.setnchannels(1)
-            writer.setsampwidth(2)
-            writer.setframerate(sample_rate)
+            channels = 1
+            writer = open_writer(channels)
         writer.close()
         writer = None
         tmp_path.replace(out_path)  # atomic: out_path untouched until here
@@ -332,4 +345,8 @@ def render_export(
         "duration": frames_written / sample_rate,
         "sample_rate": sample_rate,
         "channels": channels,
+        "format": fmt,
+        "bits": None if fmt == "mp3" else out_bits,
+        "source_bits": source_format.bits,
+        "source_codec": source_format.codec,
     }

@@ -20,11 +20,16 @@
         <button id="toggle-excluded-btn" disabled title="ซ่อน/โชว์คำที่ขีดฆ่าและคำที่ตัดแล้วบนจอ — มุมมองเท่านั้น ข้อมูลไม่เปลี่ยน">ซ่อนคำที่ไม่ใช้</button>
         <button id="save-btn" disabled title="บันทึกโปรเจกต์ (Cmd/Ctrl+S)">บันทึก</button>
         <button id="save-as-btn" disabled title="บันทึกเป็นไฟล์ใหม่ โดยไม่ทับไฟล์เดิม">บันทึกเป็น</button>
+        <button id="pack-btn" disabled title="รวมไฟล์เสียง + ไฟล์งาน ไว้ในโฟลเดอร์เดียว ย้ายเครื่อง/ส่งต่อได้ทั้งชุด เปิดได้เลยไม่ต้องแตกไฟล์">📦 รวมเป็นโปรเจกต์</button>
         <button id="export-btn" disabled title="Render เสียงตามการตัด (WAV + crossfade) และ .docx เนื้อหาที่แก้แล้ว — ต้นฉบับไม่ถูกแตะ">Export</button>
         <button id="cancel-job-btn" class="cancel-btn" hidden title="หยุดงานที่กำลังทำ (ถอด/ตรึง/export)">ยกเลิกงาน ✕</button>
         <span class="cut-group">
           <button id="cut-btn" disabled title="ตัดช่วงคำที่เลือก (Delete) — บันทึกลง EDL ไม่แตะไฟล์ต้นฉบับ">✂ ตัดช่วงที่เลือก</button>
           <button id="play-sel-btn" disabled title="เล่นเฉพาะช่วงที่เลือกแล้วหยุด (Shift+Space)">ฟังช่วงที่เลือก</button>
+          <button id="marker-btn" disabled title="มาร์กตำแหน่งนี้ไว้ พร้อมเขียนโน้ตกำกับ (M)">🚩 มาร์กจุด</button>
+          <button id="scope-btn" disabled title="กั้นหน้ากั้นหลัง: ล็อกให้เล่นเฉพาะช่วงที่เลือก กด Space กี่ครั้งก็อยู่ในกรอบนี้ (Ctrl+L) — กดซ้ำเพื่อปลด">⇥ กั้นช่วงฟัง</button>
+          <button id="loop-btn" disabled title="วนซ้ำช่วงที่กั้นไว้ ไม่ต้องกดเล่นใหม่">↻ วนลูป</button>
+          <button id="preview-cut-btn" disabled title="ฟังว่าถ้าตัดตรงนี้จะออกมาเสียงยังไง ก่อนตัดจริง (Ctrl+K) — เล่นนำ 1.5 วิ ข้ามช่วงที่เลือก แล้วเล่นต่อ 1.5 วิ">▶ ลองฟังรอยตัด</button>
           <button id="testcut-btn" disabled title="ปกติแอปเล่นข้ามส่วนที่ตัดเสมอ — กดปุ่มนี้เพื่อฟังต้นฉบับเต็มชั่วคราว (ต้นฉบับไม่เคยถูกแก้)">ฟังต้นฉบับ</button>
           <button id="undo-btn" disabled title="ย้อนการตัด (Cmd/Ctrl+Z)">↺</button>
           <button id="redo-btn" disabled title="ทำซ้ำ (Cmd/Ctrl+Shift+Z)">↻</button>
@@ -64,6 +69,15 @@
         <canvas id="spectrogram" class="spectrogram"></canvas>
       </div>
 
+      <section id="markers-panel" class="markers-panel" hidden>
+        <div class="markers-header">
+          <b>จุดที่มาร์กไว้ (<span id="marker-count">0</span>)</b>
+          <span class="markers-hint">กด M เพื่อมาร์กตรงตำแหน่งที่เล่นอยู่ · ลากธงบนคลื่นเพื่อขยับ</span>
+          <button id="copy-markers-btn" title="คัดลอกรายการทั้งหมดเป็นข้อความ ไปวางในใบปะหน้าได้เลย">📋 คัดลอกรายการ</button>
+        </div>
+        <ol id="marker-list" class="marker-list"></ol>
+      </section>
+
       <div id="fine-bar" class="fine-bar" hidden>
         <span class="fine-label">เก็บละเอียดขอบตัด:</span>
         <span>เริ่ม <b id="fine-start"></b></span>
@@ -95,16 +109,25 @@
       <dialog id="export-dialog" class="export-dialog">
         <p>จะ export อะไรบ้าง?</p>
         <div class="export-dialog-buttons">
-          <button id="export-both-btn" value="both">🔊 เสียง + บท</button>
+          <button id="export-both-btn" value="both" title="WAV คุณภาพเต็ม รักษาความละเอียด (bit depth) เท่าไฟล์ต้นฉบับ">🔊 เสียง WAV + บท</button>
+          <button id="export-mp3-btn" value="mp3" title="MP3 192kbps ไฟล์เล็ก ส่งง่าย — เป็นการบีบอัด ไม่เหมาะใช้เป็นไฟล์ต้นฉบับ">🎵 เสียง MP3 + บท</button>
           <button id="export-doc-btn" value="doc">📄 เฉพาะบท (.docx/.txt)</button>
           <button id="export-cancel-btn" value="cancel">ยกเลิก</button>
         </div>
+        <label class="export-verify">
+          <input id="export-verify-check" type="checkbox" checked />
+          ตรวจพลังเสียงหลัง export (เทียบ RMS/peak กับต้นฉบับ)
+        </label>
       </dialog>
 
       <footer class="statusbar">
         <span id="backend-status" class="status status-checking">
           <span class="dot"></span>
           <span id="backend-status-text">กำลังตรวจสอบ backend…</span>
+        </span>
+        <span id="models-info" class="models-info" hidden>
+          <span id="models-info-text"></span>
+          <button id="delete-models-btn" title="ลบโมเดล AI ออกจากเครื่องเพื่อคืนพื้นที่ — ถอดเสียง/ตรึงบทจะใช้ไม่ได้จนกว่าจะติดตั้งใหม่">ลบโมเดล</button>
         </span>
       </footer>
     </main>

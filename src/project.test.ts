@@ -285,3 +285,115 @@ describe("Project serialization", () => {
     expect(restored.effectiveText(0)).toBe("ดี");
   });
 });
+
+describe("markers (annotation for the cover sheet)", () => {
+  const projectWith = (): Project => new Project("/a.wav", makeTranscription());
+
+  it("keeps markers sorted by time however they were added", () => {
+    const p = projectWith();
+    p.addMarker(5, "ท้าย");
+    p.addMarker(1, "ต้น");
+    p.addMarker(3, "กลาง");
+    expect(p.markers.map((m) => m.note)).toEqual(["ต้น", "กลาง", "ท้าย"]);
+  });
+
+  it("gives every marker a distinct id", () => {
+    const p = projectWith();
+    const ids = [p.addMarker(1).id, p.addMarker(1).id, p.addMarker(1).id];
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("edits a note by id, not by row position", () => {
+    const p = projectWith();
+    const first = p.addMarker(9, "ท้าย");
+    p.addMarker(1, "ต้น"); // re-sorts: `first` is no longer row 0
+    p.setMarkerNote(first.id, "แก้แล้ว");
+    expect(p.markers.find((m) => m.id === first.id)?.note).toBe("แก้แล้ว");
+    expect(p.markers[0].note).toBe("ต้น");
+  });
+
+  it("re-sorts when a marker moves", () => {
+    const p = projectWith();
+    const a = p.addMarker(1, "a");
+    p.addMarker(5, "b");
+    p.moveMarker(a.id, 9);
+    expect(p.markers.map((m) => m.note)).toEqual(["b", "a"]);
+  });
+
+  it("removes by id and reports whether anything went", () => {
+    const p = projectWith();
+    const m = p.addMarker(1, "x");
+    expect(p.removeMarker(m.id)).toBe(true);
+    expect(p.removeMarker(m.id)).toBe(false);
+    expect(p.markers).toHaveLength(0);
+  });
+
+  it("marks the project dirty on every mutation", () => {
+    const p = projectWith();
+    const m = p.addMarker(1, "x");
+    p.dirty = false;
+    p.setMarkerNote(m.id, "y");
+    expect(p.dirty).toBe(true);
+    p.dirty = false;
+    p.moveMarker(m.id, 2);
+    expect(p.dirty).toBe(true);
+    p.dirty = false;
+    p.removeMarker(m.id);
+    expect(p.dirty).toBe(true);
+  });
+
+  it("does not dirty the project for a no-op edit", () => {
+    const p = projectWith();
+    const m = p.addMarker(1, "x");
+    p.dirty = false;
+    p.setMarkerNote(m.id, "x");
+    p.moveMarker(m.id, 1);
+    expect(p.dirty).toBe(false);
+  });
+
+  it("round-trips markers through save and load", () => {
+    const p = projectWith();
+    p.addMarker(2.5, "ตรงนี้เสียงแตก");
+    p.addMarker(7, "");
+    const loaded = Project.parse(p.serialize());
+    expect(loaded.markers.map((m) => [m.time, m.note])).toEqual([
+      [2.5, "ตรงนี้เสียงแตก"],
+      [7, ""],
+    ]);
+  });
+
+  it("writes version 3", () => {
+    const p = projectWith();
+    expect(JSON.parse(p.serialize()).version).toBe(3);
+  });
+
+  it("still opens a v2 project, with no markers", () => {
+    const p = projectWith();
+    const v2 = JSON.parse(p.serialize());
+    v2.version = 2;
+    delete v2.markers;
+    const loaded = Project.parse(JSON.stringify(v2));
+    expect(loaded.markers).toEqual([]);
+  });
+
+  it("re-mints ids on load so a duplicated id can't alias two markers", () => {
+    const p = projectWith();
+    const file = JSON.parse(p.serialize());
+    file.markers = [
+      { id: "same", time: 1, note: "หนึ่ง" },
+      { id: "same", time: 2, note: "สอง" },
+    ];
+    const loaded = Project.parse(JSON.stringify(file));
+    const ids = loaded.markers.map((m) => m.id);
+    expect(new Set(ids).size).toBe(2);
+    loaded.setMarkerNote(ids[0], "แก้");
+    expect(loaded.markers[1].note).toBe("สอง");
+  });
+
+  it("drops markers with a non-numeric time instead of failing the load", () => {
+    const p = projectWith();
+    const file = JSON.parse(p.serialize());
+    file.markers = [{ id: "a", time: "ไม่ใช่เลข", note: "x" }, { id: "b", time: 3, note: "ok" }];
+    expect(Project.parse(JSON.stringify(file)).markers).toHaveLength(1);
+  });
+});
