@@ -60,6 +60,8 @@ let backendUp = false;
 let modelsReady = false;
 
 function setup(): void {
+  const helpBtn = el<HTMLButtonElement>("#help-btn");
+  const helpDialog = el<HTMLDialogElement>("#help-dialog");
   const newBtn = el<HTMLButtonElement>("#new-btn");
   const openBtn = el<HTMLButtonElement>("#open-btn");
   const saveAsBtn = el<HTMLButtonElement>("#save-as-btn");
@@ -93,6 +95,7 @@ function setup(): void {
   const markerList = el<HTMLOListElement>("#marker-list");
   const markerCount = el<HTMLElement>("#marker-count");
   const copyMarkersBtn = el<HTMLButtonElement>("#copy-markers-btn");
+  const saveMarkersBtn = el<HTMLButtonElement>("#save-markers-btn");
   const scopeBtn = el<HTMLButtonElement>("#scope-btn");
   const loopBtn = el<HTMLButtonElement>("#loop-btn");
   const undoBtn = el<HTMLButtonElement>("#undo-btn");
@@ -415,6 +418,68 @@ function setup(): void {
   };
 
   markerBtn.addEventListener("click", addMarkerHere);
+
+  /** The marker list as a STANDALONE note document for the QC reviewer.
+   * Deliberately not the transcript: QC wants the list of places to check,
+   * not the whole story (team workflow, 2026-08-21). The source filename is
+   * included because this file travels on its own and has to say which audio
+   * it belongs to. */
+  const markerDocLines = (p: Project): string[] => {
+    const audioName = p.audioPath.split(/[\/]/).pop() ?? p.audioPath;
+    const lines = [
+      "รายการจุดที่มาร์กไว้ (สำหรับตรวจงาน)",
+      `ไฟล์เสียง: ${audioName}`,
+      `จำนวน: ${p.markers.length} จุด`,
+      "",
+    ];
+    p.markers.forEach((m, i) => {
+      lines.push(`${i + 1}. ${formatTime(m.time)}  ${m.note}`.trimEnd());
+    });
+    return lines;
+  };
+
+  /** Same list as CSV so it opens straight into Excel — with many markers on
+   * a long file, a spreadsheet beats a document for ticking items off. */
+  const markerCsv = (p: Project): string => {
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const rows = [["ลำดับ", "เวลา", "วินาที", "โน้ต"].map(escape).join(",")];
+    p.markers.forEach((m, i) => {
+      rows.push(
+        [String(i + 1), formatTime(m.time), m.time.toFixed(3), m.note].map(escape).join(","),
+      );
+    });
+    // BOM: Excel reads a UTF-8 CSV as the system codepage without it and
+    // renders every Thai character as mojibake.
+    return "\ufeff" + rows.join("\r\n");
+  };
+
+  saveMarkersBtn.addEventListener("click", async () => {
+    if (!project || project.markers.length === 0) return;
+    const proj = project;
+    const base = proj.audioPath.replace(/\.[^.]+$/, "");
+    try {
+      const target = await save({
+        defaultPath: `${base}-โน้ตตรวจงาน.docx`,
+        filters: [
+          { name: "Word", extensions: ["docx"] },
+          { name: "Text", extensions: ["txt"] },
+          { name: "Excel (CSV)", extensions: ["csv"] },
+        ],
+      });
+      if (!target) return;
+      const lower = target.toLowerCase();
+      if (lower.endsWith(".csv")) {
+        await writeTextFile(target, markerCsv(proj));
+      } else if (lower.endsWith(".txt")) {
+        await writeTextFile(target, markerDocLines(proj).join("\n"));
+      } else {
+        await exportDocx(target, markerDocLines(proj));
+      }
+      fileName.textContent = `✅ บันทึกรายการมาร์ก ${proj.markers.length} จุด: ${target}`;
+    } catch (err) {
+      fileName.textContent = `บันทึกรายการมาร์กไม่สำเร็จ: ${String(err)}`;
+    }
+  });
 
   copyMarkersBtn.addEventListener("click", async () => {
     if (!project) return;
@@ -901,6 +966,14 @@ function setup(): void {
   });
 
   // --- playback + keyboard ---
+  // --- keyboard shortcut help ---
+  const toggleHelp = () => {
+    if (helpDialog.open) helpDialog.close();
+    else helpDialog.showModal();
+  };
+  helpBtn.addEventListener("click", toggleHelp);
+  el<HTMLButtonElement>("#help-close-btn").addEventListener("click", () => helpDialog.close());
+
   playBtn.addEventListener("click", () => player.playPause());
   window.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -931,6 +1004,15 @@ function setup(): void {
     }
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
+
+    // "?" and F1 open the shortcut list. Checked before the button guard so
+    // it works right after clicking a toolbar button, but after the INPUT
+    // check below would be too late — so guard on typing explicitly here.
+    if ((e.key === "?" || e.key === "F1") && tag !== "INPUT" && tag !== "TEXTAREA") {
+      e.preventDefault();
+      toggleHelp();
+      return;
+    }
     // Space must ALWAYS toggle playback (like every audio editor) EXCEPT while
     // typing text. Handle it before the button guard below, and blur any
     // focused button so it can't swallow the key — after clicking a toolbar
@@ -967,9 +1049,52 @@ function setup(): void {
       addMarkerHere();
       return;
     }
-    if ((e.key === "Delete" || e.key === "Backspace") && selection) {
+    // Cut whatever is selected. Guarded on selectionBounds, NOT on the token
+    // selection: dragging the blue band straight on the waveform sets bounds
+    // and deliberately CLEARS the token selection, so keying off `selection`
+    // made Delete silently do nothing for exactly the Sound Forge workflow
+    // this is meant to serve (select the band, hit a key).
+    if ((e.key === "Delete" || e.key === "Backspace") && selectionBounds) {
       e.preventDefault();
       cutSelection();
+      return;
+    }
+
+    // --- Sound Forge selection keys ---------------------------------------
+    // Arrows move the cursor by ONE SCREEN PIXEL, so the step scales with
+    // zoom exactly as Sound Forge does: coarse zoomed out, sample-fine zoomed
+    // in. Shift extends the selection instead of moving.
+    if (player.isLoaded && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      const back = e.key === "ArrowLeft";
+      const pixel = 1 / Math.max(player.pixelsPerSecond, 1);
+      const step = (e.ctrlKey || e.metaKey ? 1 : pixel) * (back ? -1 : 1);
+      const clamp = (t: number) => Math.max(0, Math.min(player.duration, t));
+      if (e.shiftKey) {
+        // Grow/shrink from the playhead, like dragging the band's far edge.
+        const anchor = selectionBounds ?? { start: player.currentTime, end: player.currentTime };
+        const moved = clamp(anchor.end + step);
+        transcript.clearSelection();
+        setSelectionBounds(
+          moved <= anchor.start
+            ? { start: moved, end: anchor.start }
+            : { start: anchor.start, end: moved },
+        );
+      } else {
+        player.seekTo(clamp(player.currentTime + step));
+      }
+      return;
+    }
+    if (player.isLoaded && (e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      player.seekTo(e.key === "Home" ? 0 : player.duration);
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && player.isLoaded) {
+      e.preventDefault();
+      transcript.clearSelection();
+      setSelectionBounds({ start: 0, end: player.duration });
+      return;
     }
     // keyboard editing: click selects a word, Enter opens the edit box
     if (e.key === "Enter" && selection) {
@@ -1305,6 +1430,7 @@ function setup(): void {
   const modelsBannerText = el<HTMLElement>("#models-banner-text");
   const downloadModelsBtn = el<HTMLButtonElement>("#download-models-btn");
 
+  const gpuInfo = el<HTMLElement>("#gpu-info");
   const modelsInfo = el<HTMLElement>("#models-info");
   const modelsInfoText = el<HTMLElement>("#models-info-text");
   const deleteModelsBtn = el<HTMLButtonElement>("#delete-models-btn");
@@ -1319,6 +1445,30 @@ function setup(): void {
     // — uninstalling the app leaves them behind on purpose (so updates don't
     // re-download 4.4GB) and the team only found that out by accident
     // (feedback 2026-08-20).
+    // GPU line: measured 10.4x faster than CPU on an RTX 5060, so the user
+    // should be able to see at a glance which one they are getting — and,
+    // when they have a card but no add-on, what to do about it.
+    const gpu = status?.gpu;
+    gpuInfo.hidden = !modelsReady || !gpu;
+    if (gpu) {
+      if (gpu.device === "cuda") {
+        gpuInfo.textContent = "⚡ ใช้การ์ดจอ";
+        gpuInfo.className = "gpu-info gpu-on";
+        gpuInfo.title =
+          "ถอดเสียงด้วยการ์ดจอ เร็วกว่าซีพียูราว 10 เท่า\n" +
+          "ครั้งแรกหลังเปิดโปรแกรมจะช้ากว่าปกติ (เตรียมโค้ดให้เข้ากับการ์ด) — หลังจากนั้นเร็วตลอด";
+      } else if (gpu.devices > 0 && !gpu.libraries_found) {
+        // The actionable case: the hardware is there, the add-on is not.
+        gpuInfo.textContent = "🖥️ มีการ์ดจอ แต่ยังไม่ได้เปิดใช้";
+        gpuInfo.className = "gpu-info gpu-off";
+        gpuInfo.title =
+          `พบการ์ดจอ NVIDIA ${gpu.devices} ตัว แต่ยังไม่มีไฟล์เสริม\n` +
+          `ก๊อปโฟลเดอร์ "gpu-เสริม" (${gpu.required_dlls.join(", ")}) ` +
+          "ไปวางในโฟลเดอร์ที่ติดตั้งโปรแกรม แล้วเปิดใหม่ → ถอดเสียงเร็วขึ้นราว 10 เท่า";
+      } else {
+        gpuInfo.hidden = true; // no NVIDIA card: nothing useful to say
+      }
+    }
     modelsInfo.hidden = !modelsReady || status === null;
     if (modelsReady && status) {
       modelsInfoText.textContent = `โมเดล AI ${formatGb(status.modelsBytes)} · ${status.modelsDir}`;

@@ -564,6 +564,13 @@ export class AudioPlayer {
     return { data: this.decoded.getChannelData(0), sampleRate: this.decoded.sampleRate };
   }
 
+  /** Current horizontal zoom. Sound Forge's arrow keys move by one screen
+   * pixel, so the step scales with zoom: coarse when zoomed out, sample-fine
+   * when zoomed in. Exposed so main.ts can do the same. */
+  get pixelsPerSecond(): number {
+    return this.pxPerSec;
+  }
+
   get duration(): number {
     return this.ws.getDuration();
   }
