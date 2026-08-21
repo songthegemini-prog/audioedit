@@ -57,13 +57,31 @@ def _candidate_dirs() -> list[Path]:
 
     dirs: list[Path] = []
 
-    # Packaged app: the user drops the add-on next to the sidecar executable.
-    # sys.executable is the .exe when frozen; _MEIPASS is PyInstaller's
-    # unpack dir, which onedir builds also populate.
-    roots = [Path(sys.executable).parent]
+    # The data folder, beside `models/`. This is the FIRST place we look and
+    # the one the docs recommend: the team already knows how to reach it
+    # (it is where they drop the models folder from USB), and unlike the
+    # install directory it needs no admin rights to write to.
+    data_dir = os.environ.get("AUDIOEDIT_DATA_DIR")
+    if data_dir:
+        dirs.append(Path(data_dir) / "cuda")
+
+    # Packaged app. The sidecar does NOT live next to the main executable —
+    # Tauri puts it at <install>/resources/backend/audioedit-backend/ — but
+    # "next to the app icon" is exactly where a user will drop the add-on.
+    # So walk UP from the sidecar as well, which covers both spellings.
+    roots: list[Path] = [Path(sys.executable).parent]
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         roots.append(Path(meipass))
+    for root in list(roots):
+        # 4 levels reaches the install root from
+        # <install>/resources/backend/audioedit-backend/
+        parent = root
+        for _ in range(4):
+            parent = parent.parent
+            if parent == parent.parent:  # hit the drive root
+                break
+            roots.append(parent)
     for root in roots:
         dirs.append(root)
         dirs.append(root / "cuda")

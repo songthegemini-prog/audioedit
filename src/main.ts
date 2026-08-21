@@ -1462,9 +1462,11 @@ function setup(): void {
         gpuInfo.textContent = "🖥️ มีการ์ดจอ แต่ยังไม่ได้เปิดใช้";
         gpuInfo.className = "gpu-info gpu-off";
         gpuInfo.title =
-          `พบการ์ดจอ NVIDIA ${gpu.devices} ตัว แต่ยังไม่มีไฟล์เสริม\n` +
-          `ก๊อปโฟลเดอร์ "gpu-เสริม" (${gpu.required_dlls.join(", ")}) ` +
-          "ไปวางในโฟลเดอร์ที่ติดตั้งโปรแกรม แล้วเปิดใหม่ → ถอดเสียงเร็วขึ้นราว 10 เท่า";
+          `พบการ์ดจอ NVIDIA ${gpu.devices} ตัว แต่ยังไม่มีไฟล์เสริม\n\n` +
+          `ก๊อป ${gpu.required_dlls.join(" และ ")}\n` +
+          `ไปไว้ในโฟลเดอร์ชื่อ cuda ที่นี่:\n${status.dataDir}\n\n` +
+          "(สร้างโฟลเดอร์ cuda เองข้างๆ โฟลเดอร์ models) แล้วเปิดโปรแกรมใหม่\n" +
+          "→ ถอดเสียงเร็วขึ้นราว 10 เท่า";
       } else {
         gpuInfo.hidden = true; // no NVIDIA card: nothing useful to say
       }

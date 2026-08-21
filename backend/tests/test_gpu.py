@@ -147,3 +147,38 @@ def test_status_never_raises_when_ctranslate2_is_broken(monkeypatch) -> None:
 
     assert gpu.status()["available"] is False
     assert gpu.cuda_available() is False
+
+
+def test_finds_the_add_on_in_the_data_folder(tmp_path, monkeypatch) -> None:
+    """The location the docs recommend: beside `models/`, which the team
+    already knows how to reach and can write to without admin rights."""
+    data = tmp_path / "data"
+    cuda = data / "cuda"
+    cuda.mkdir(parents=True)
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        (cuda / name).write_bytes(b"x")
+    monkeypatch.setenv("AUDIOEDIT_DATA_DIR", str(data))
+
+    state = gpu.enable_cuda_libraries()
+
+    assert state["found"] is True
+    assert state["dir"] == str(cuda)
+
+
+def test_finds_the_add_on_dropped_next_to_the_app_icon(tmp_path, monkeypatch) -> None:
+    """Tauri puts the sidecar at <install>/resources/backend/audioedit-backend/,
+    NOT beside the main .exe — but "next to the app icon" is where a user will
+    actually drop the files. Walking up from the sidecar has to reach it, or
+    the team copies the add-on and nothing happens."""
+    install = tmp_path / "audioedit"
+    sidecar = install / "resources" / "backend" / "audioedit-backend"
+    sidecar.mkdir(parents=True)
+    for name in gpu.REQUIRED_CUDA_DLLS:  # dropped at the INSTALL root
+        (install / name).write_bytes(b"x")
+    monkeypatch.delenv("AUDIOEDIT_DATA_DIR", raising=False)
+    monkeypatch.setattr(gpu.sys, "executable", str(sidecar / "audioedit-backend.exe"))
+
+    state = gpu.enable_cuda_libraries()
+
+    assert state["found"] is True
+    assert state["dir"] == str(install)
