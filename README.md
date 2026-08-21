@@ -36,12 +36,11 @@ Export (WAV + .docx/.txt) ทุกอย่างออฟไลน์ ต้�
 
 ### ขั้นที่ 1: ดาวน์โหลดตัวติดตั้งจาก GitHub
 
-1. ไปที่แท็บ **[Actions](../../actions/workflows/build.yml)** ของ repo นี้
-2. คลิก run ล่าสุดที่มีเครื่องหมายถูกเขียว ✓
-3. เลื่อนลงล่างสุด ส่วน **Artifacts** → ดาวน์โหลด:
-   - **audioedit-windows** (ข้างในมี `.exe`) — สำหรับ Windows
-   - **audioedit-macos** (ข้างในมี `.dmg`) — สำหรับ Mac
-4. แตก zip ที่โหลดมา
+1. เข้าหน้านี้: **[หน้าดาวน์โหลด (Releases)](../../releases/latest)**
+2. เลื่อนลงไปหาหัวข้อ **Assets** แล้วกดโหลดไฟล์ให้ตรงกับเครื่อง:
+   - **Windows** → ไฟล์ที่ลงท้าย **`.exe`**
+   - **Mac** → ไฟล์ที่ลงท้าย **`.dmg`**
+3. ดับเบิลคลิกไฟล์ที่โหลดมาได้เลย (ไม่ต้องแตก zip)
 
 ### ขั้นที่ 2: เปิดแอปครั้งแรก (ผ่านคำเตือนความปลอดภัย)
 
@@ -84,33 +83,54 @@ Export (WAV + .docx/.txt) ทุกอย่างออฟไลน์ ต้�
 
 ### อัปเดตเวอร์ชันใหม่ (สำหรับเจ้าของ repo)
 
-push โค้ดขึ้น main แล้วไปแท็บ **Actions → build-installers → Run workflow**
-→ รอ ~15-20 นาที → โหลด artifact ตัวใหม่ไปแจกทีม (โมเดลที่ลงไว้แล้วไม่ต้องโหลดซ้ำ)
-- ก่อน build ต้องสร้าง backend ก่อนหนึ่งครั้ง:
-  `cd backend && .venv/bin/pyinstaller audioedit-backend.spec`
+**push tag เวอร์ชันขึ้นไป** แล้ว CI จะ build ให้เองทั้ง Windows และ macOS
+พร้อม **สร้างหน้า Releases** ที่มีตัวติดตั้งแนบไว้ให้ทีมกดโหลดได้เลย:
+
+```sh
+# bump เลขเวอร์ชัน 3 ที่ให้ตรงกันก่อน:
+#   package.json / src-tauri/tauri.conf.json / backend/app/main.py (APP_VERSION)
+git push origin main
+git tag -a v1.3.1 -m "..." && git push origin v1.3.1
+```
+
+รอ ~20 นาที → หน้า Releases จะมี `.exe` และ `.dmg` โผล่มาเอง
+(โมเดลที่ทีมลงไว้แล้วไม่ถูกลบตอนอัปเดต ไม่ต้องโหลด 4.4GB ซ้ำ)
+
+- CI สร้าง backend ด้วย PyInstaller ให้เองอยู่แล้ว (`build.yml`) —
+  **ไม่ต้อง build เองก่อน push**
+- อยาก build โดยไม่ออก release ก็ได้: **Actions → build-installers →
+  Run workflow** จะได้ artifact แบบ zip แทน (ไม่มีหน้า Releases)
 
 ## Setup ครั้งแรก (สำหรับนักพัฒนา)
 
-ต้องมี: Node.js 20+, **Python 3.12** (3.14 ยังใช้กับ ctranslate2 ไม่ได้), Rust toolchain
+ต้องมี: Node.js 20+, **Python 3.12 ขึ้นไป**, Rust toolchain
+(Rust จำเป็นเฉพาะตอน build ตัวแอป — แก้โค้ดกับรัน test ไม่ต้องมี)
+
+> **Python 3.14 ใช้ได้แล้ว** — เดิม README เขียนว่าใช้ไม่ได้เพราะ ctranslate2
+> ยังไม่มี wheel ตอนนี้มีครบแล้ว (ctranslate2 4.8.1, torch 2.13, faster-whisper
+> 1.2) ตรวจสอบจริงบน Windows + Python 3.14.7 เมื่อ 2026-08-20 เทสต์ผ่านทั้งหมด
+
+**macOS / Linux**
 
 ```sh
-# 1. Rust (ถ้ายังไม่มี)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
+npm install                                                      # frontend + tauri
 
-# 2. Python 3.12 (ถ้ายังไม่มี)
-brew install python@3.12
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/fetch_model.py    # โมเดล ~4.4GB, ครั้งเดียว
+```
 
-# 3. frontend + tauri
+**Windows** (ลง Rust จาก <https://rustup.rs>)
+
+```sh
 npm install
 
-# 4. backend
 cd backend
-/opt/homebrew/bin/python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 5. ดาวน์โหลดโมเดล (ครั้งเดียว — ขั้นตอนเดียวที่ใช้เน็ต):
-#    ASR ~3GB + forced alignment ~1.3GB
-.venv/bin/python scripts/fetch_model.py
+py -3 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe scripts/fetch_model.py
 ```
 
 โมเดลถูกเก็บใน `models/` (gitignored): `asr/thonburian-large-v2/` และ `align/wav2vec2-th/`
