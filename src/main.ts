@@ -93,6 +93,7 @@ function setup(): void {
   const markerList = el<HTMLOListElement>("#marker-list");
   const markerCount = el<HTMLElement>("#marker-count");
   const copyMarkersBtn = el<HTMLButtonElement>("#copy-markers-btn");
+  const saveMarkersBtn = el<HTMLButtonElement>("#save-markers-btn");
   const scopeBtn = el<HTMLButtonElement>("#scope-btn");
   const loopBtn = el<HTMLButtonElement>("#loop-btn");
   const undoBtn = el<HTMLButtonElement>("#undo-btn");
@@ -415,6 +416,68 @@ function setup(): void {
   };
 
   markerBtn.addEventListener("click", addMarkerHere);
+
+  /** The marker list as a STANDALONE note document for the QC reviewer.
+   * Deliberately not the transcript: QC wants the list of places to check,
+   * not the whole story (team workflow, 2026-08-21). The source filename is
+   * included because this file travels on its own and has to say which audio
+   * it belongs to. */
+  const markerDocLines = (p: Project): string[] => {
+    const audioName = p.audioPath.split(/[\/]/).pop() ?? p.audioPath;
+    const lines = [
+      "รายการจุดที่มาร์กไว้ (สำหรับตรวจงาน)",
+      `ไฟล์เสียง: ${audioName}`,
+      `จำนวน: ${p.markers.length} จุด`,
+      "",
+    ];
+    p.markers.forEach((m, i) => {
+      lines.push(`${i + 1}. ${formatTime(m.time)}  ${m.note}`.trimEnd());
+    });
+    return lines;
+  };
+
+  /** Same list as CSV so it opens straight into Excel — with many markers on
+   * a long file, a spreadsheet beats a document for ticking items off. */
+  const markerCsv = (p: Project): string => {
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const rows = [["ลำดับ", "เวลา", "วินาที", "โน้ต"].map(escape).join(",")];
+    p.markers.forEach((m, i) => {
+      rows.push(
+        [String(i + 1), formatTime(m.time), m.time.toFixed(3), m.note].map(escape).join(","),
+      );
+    });
+    // BOM: Excel reads a UTF-8 CSV as the system codepage without it and
+    // renders every Thai character as mojibake.
+    return "\ufeff" + rows.join("\r\n");
+  };
+
+  saveMarkersBtn.addEventListener("click", async () => {
+    if (!project || project.markers.length === 0) return;
+    const proj = project;
+    const base = proj.audioPath.replace(/\.[^.]+$/, "");
+    try {
+      const target = await save({
+        defaultPath: `${base}-โน้ตตรวจงาน.docx`,
+        filters: [
+          { name: "Word", extensions: ["docx"] },
+          { name: "Text", extensions: ["txt"] },
+          { name: "Excel (CSV)", extensions: ["csv"] },
+        ],
+      });
+      if (!target) return;
+      const lower = target.toLowerCase();
+      if (lower.endsWith(".csv")) {
+        await writeTextFile(target, markerCsv(proj));
+      } else if (lower.endsWith(".txt")) {
+        await writeTextFile(target, markerDocLines(proj).join("\n"));
+      } else {
+        await exportDocx(target, markerDocLines(proj));
+      }
+      fileName.textContent = `✅ บันทึกรายการมาร์ก ${proj.markers.length} จุด: ${target}`;
+    } catch (err) {
+      fileName.textContent = `บันทึกรายการมาร์กไม่สำเร็จ: ${String(err)}`;
+    }
+  });
 
   copyMarkersBtn.addEventListener("click", async () => {
     if (!project) return;
