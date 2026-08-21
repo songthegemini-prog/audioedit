@@ -11,6 +11,7 @@
   <body>
     <main class="app">
       <header class="toolbar">
+        <button id="help-btn" title="ดูปุ่มลัดทั้งหมด (กด ? หรือ F1)">? ปุ่มลัด</button>
         <button id="new-btn" title="เริ่มงานใหม่ (ล้างงานปัจจุบัน)">งานใหม่</button>
         <button id="open-btn">เปิดไฟล์เสียง</button>
         <button id="play-btn" disabled>เล่น</button>
@@ -106,6 +107,60 @@
           Delete = ตัด, Enter หรือดับเบิลคลิก = แก้สะกด, คลิกขวา = ไม่ใช่เนื้อหา)
         </div>
       </section>
+
+      <dialog id="help-dialog" class="help-dialog">
+        <div class="help-head">
+          <b>ปุ่มลัดทั้งหมด</b>
+          <button id="help-close-btn" value="close">ปิด</button>
+        </div>
+
+        <h4>เล่นเสียง</h4>
+        <table class="help-table">
+          <tr><td><kbd>Space</kbd></td><td>เล่น / หยุด</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>Space</kbd></td><td>ฟังเฉพาะช่วงที่เลือก</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>กั้นช่วงฟัง — ล็อกให้ Space เล่นแค่ในกรอบ (กดซ้ำเพื่อปลด)</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td><b>ลองฟังรอยตัด</b> — เล่นนำ 1.5 วิ ข้ามช่วงที่เลือก เล่นต่อ 1.5 วิ</td></tr>
+        </table>
+
+        <h4>เลือกและตัด (ทำด้วยคีย์บอร์ดล้วนได้)</h4>
+        <table class="help-table">
+          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>เลื่อนหัวอ่านทีละ 1 พิกเซล — ยิ่งซูมเข้า ยิ่งละเอียด</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>เลื่อนทีละ 1 วินาที</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td><b>กาง / หดแถบฟ้า</b></td></tr>
+          <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>ต้นไฟล์ / ท้ายไฟล์</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>เลือกทั้งไฟล์</td></tr>
+          <tr><td><kbd>Delete</kbd> <kbd>Backspace</kbd></td><td>ตัดช่วงที่เลือก</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>ยกเลิกการเลือก</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>ย้อนการตัด</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>ทำซ้ำ</td></tr>
+        </table>
+
+        <h4>บทและการตรวจ</h4>
+        <table class="help-table">
+          <tr><td><kbd>Tab</kbd></td><td>ไปคำขีดแดงถัดไป + ฟังเสียง + เปิดกล่องแก้</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>ย้อนกลับคำก่อนหน้า</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>แก้คำที่เลือก</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>ค้นหาคำ (<kbd>Enter</kbd> = ถัดไป)</td></tr>
+          <tr><td><kbd>M</kbd></td><td><b>มาร์กจุด</b> ตรงตำแหน่งที่เล่นอยู่ แล้วพิมพ์โน้ตได้เลย</td></tr>
+        </table>
+
+        <h4>เมาส์บนคลื่นเสียง</h4>
+        <table class="help-table">
+          <tr><td>ล้อเมาส์</td><td>ซูมเข้า / ออก</td></tr>
+          <tr><td><kbd>Shift</kbd>+ล้อ</td><td>เลื่อนคลื่นซ้าย / ขวา</td></tr>
+          <tr><td><kbd>Alt</kbd>+ล้อ</td><td>เลื่อนขึ้นลง ดู spectrogram</td></tr>
+          <tr><td>ลากบนคลื่น</td><td>เลือกช่วง (แถบฟ้า)</td></tr>
+        </table>
+
+        <h4>ไฟล์</h4>
+        <table class="help-table">
+          <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>บันทึกโปรเจกต์</td></tr>
+        </table>
+
+        <p class="help-note">
+          บน Mac ใช้ <kbd>Cmd</kbd> แทน <kbd>Ctrl</kbd> ทุกปุ่ม
+        </p>
+      </dialog>
 
       <dialog id="export-dialog" class="export-dialog">
         <p>จะ export อะไรบ้าง?</p>

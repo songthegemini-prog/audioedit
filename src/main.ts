@@ -60,6 +60,8 @@ let backendUp = false;
 let modelsReady = false;
 
 function setup(): void {
+  const helpBtn = el<HTMLButtonElement>("#help-btn");
+  const helpDialog = el<HTMLDialogElement>("#help-dialog");
   const newBtn = el<HTMLButtonElement>("#new-btn");
   const openBtn = el<HTMLButtonElement>("#open-btn");
   const saveAsBtn = el<HTMLButtonElement>("#save-as-btn");
@@ -964,6 +966,14 @@ function setup(): void {
   });
 
   // --- playback + keyboard ---
+  // --- keyboard shortcut help ---
+  const toggleHelp = () => {
+    if (helpDialog.open) helpDialog.close();
+    else helpDialog.showModal();
+  };
+  helpBtn.addEventListener("click", toggleHelp);
+  el<HTMLButtonElement>("#help-close-btn").addEventListener("click", () => helpDialog.close());
+
   playBtn.addEventListener("click", () => player.playPause());
   window.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -994,6 +1004,15 @@ function setup(): void {
     }
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
+
+    // "?" and F1 open the shortcut list. Checked before the button guard so
+    // it works right after clicking a toolbar button, but after the INPUT
+    // check below would be too late — so guard on typing explicitly here.
+    if ((e.key === "?" || e.key === "F1") && tag !== "INPUT" && tag !== "TEXTAREA") {
+      e.preventDefault();
+      toggleHelp();
+      return;
+    }
     // Space must ALWAYS toggle playback (like every audio editor) EXCEPT while
     // typing text. Handle it before the button guard below, and blur any
     // focused button so it can't swallow the key — after clicking a toolbar

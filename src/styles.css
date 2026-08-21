@@ -658,3 +658,89 @@ body {
   color: #c9a227;
   border: 1px solid #4a4020;
 }
+
+/* Keyboard shortcut reference. Scrollable and capped, because the list is
+   long and a modal taller than the window would put its close button
+   off-screen. */
+.help-dialog {
+  max-width: 46rem;
+  max-height: 82vh;
+  overflow-y: auto;
+  background-color: #232329;
+  color: #e8e8ee;
+  border: 1px solid #44444e;
+  border-radius: 8px;
+  padding: 1rem 1.4rem 1.4rem;
+}
+
+.help-dialog::backdrop {
+  background-color: rgba(0, 0, 0, 0.55);
+}
+
+.help-head {
+  position: sticky;
+  top: -1rem;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0 0.5rem;
+  margin-top: -0.3rem;
+  background-color: #232329;
+  border-bottom: 1px solid #3a3a44;
+  font-size: 1.05rem;
+}
+
+.help-head button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: #e6e6e6;
+  background-color: #35353d;
+  border: 1px solid #4a4a55;
+  border-radius: 6px;
+  padding: 0.25rem 0.8rem;
+  cursor: pointer;
+}
+
+.help-dialog h4 {
+  margin: 1.1rem 0 0.35rem;
+  font-size: 0.88rem;
+  color: #8ab4f8;
+}
+
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.help-table td {
+  padding: 0.22rem 0.5rem 0.22rem 0;
+  vertical-align: top;
+  border-bottom: 1px solid #2c2c34;
+}
+
+.help-table td:first-child {
+  width: 12.5rem;
+  white-space: nowrap;
+}
+
+.help-dialog kbd {
+  display: inline-block;
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: #e6e6e6;
+  background-color: #35353d;
+  border: 1px solid #4a4a55;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.02rem 0.35rem;
+  margin: 0 0.05rem;
+}
+
+.help-note {
+  margin: 1.1rem 0 0;
+  font-size: 0.8rem;
+  color: #8a8a95;
+}
