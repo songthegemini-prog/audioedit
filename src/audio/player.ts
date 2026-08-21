@@ -5,6 +5,15 @@ import type { Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { Cut } from "../project";
 import { pcmToWavBlob } from "./wav";
 
+/** Height of the wavesurfer waveform canvas, in CSS px.
+ * The WaveformDetail overlay MUST be sized to exactly this and NOT to its
+ * container: on Windows the horizontal scrollbar reserves real layout space
+ * (~15px, measured) inside #waves, while macOS overlay scrollbars reserve 0.
+ * An `inset: 0` overlay therefore grew taller than the waveform on Windows
+ * only, and drew the wave centred ~7px low — spilling past the black canvas
+ * into the scrollbar strip (FIXES.md #34). */
+export const WAVE_HEIGHT = 120;
+
 export const MIN_PX_PER_SEC = 20;
 // 48000 px/s ≈ one pixel per sample — the sample-level zoom CLAUDE.md requires
 export const MAX_PX_PER_SEC = 48000;
@@ -17,6 +26,24 @@ export const LONG_MODE_PX_BUDGET = 25_000_000;
 const CUT_COLOR = "rgba(248, 81, 73, 0.28)";
 const SELECTION_COLOR = "rgba(80, 140, 255, 0.28)";
 const SELECTION_ID = "selection";
+// Markers live in the same regions plugin as cuts and the selection, so their
+// ids MUST be distinguishable: setCutRegions() clears "everything that isn't
+// the selection", and cut ids are plain indices ("0", "1", …).
+const MARKER_PREFIX = "marker:";
+const MARKER_COLOR = "rgba(201, 162, 39, 0.9)";
+
+/** The cut a Ctrl+K preview should audition from playhead `t`: the one `t`
+ * sits inside, else the next one starting after it, else (past every cut) the
+ * last one — so Ctrl+K at the end of the file still auditions something
+ * instead of doing nothing. Null only when there are no cuts at all.
+ * Pure, so it's unit-tested. */
+export function cutToPreview(cuts: readonly Cut[], t: number): Cut | null {
+  if (cuts.length === 0) return null;
+  const ordered = [...cuts].sort((a, b) => a.start - b.start);
+  const inside = ordered.find((c) => t >= c.start && t < c.end);
+  if (inside) return inside;
+  return ordered.find((c) => c.start > t) ?? ordered[ordered.length - 1];
+}
 
 /** When playback reaches time `t`, the time to jump to so cut audio is
  * skipped — or null if `t` isn't inside any cut. Jumps past the WHOLE run of
@@ -49,6 +76,8 @@ export interface AudioPlayerEvents {
   onSelectionRegionUpdated?: (start: number, end: number) => void;
   /** The user drag-created a selection directly on the waveform (no words). */
   onWaveformSelection?: (start: number, end: number) => void;
+  /** A marker flag was dragged to a new time. */
+  onMarkerMoved?: (markerId: string, time: number) => void;
   /** Visible time window changed (scroll/zoom/load) — drives the spectrogram. */
   onViewport?: (startSec: number, endSec: number) => void;
 }
@@ -64,6 +93,14 @@ export class AudioPlayer {
   private loading = false; // a loadBlob/loadStream we initiated is in flight
   private rangeEnd: number | null = null; // "ฟังช่วงที่เลือก" stop point
   private skipCuts: readonly Cut[] | null = null; // test-cut mode
+  // Sound Forge Ctrl+K preview: the ONE span this playback should jump over,
+  // independent of skipCuts (which is the persistent "cuts are live" mode).
+  private previewSkip: { start: number; end: number } | null = null;
+  // Sound Forge "region scope": a locked window the transport stays inside,
+  // so plain Space auditions ONLY that span. Survives seeks and cuts until
+  // the editor clears it — unlike rangeEnd, which is a one-shot stop.
+  private scope: { start: number; end: number } | null = null;
+  private loopScope = false;
   private pxPerSec = MIN_PX_PER_SEC;
   private events: AudioPlayerEvents;
   private decoded: AudioBuffer | null = null;
@@ -75,7 +112,7 @@ export class AudioPlayer {
     this.events = events;
     this.ws = WaveSurfer.create({
       container,
-      height: 120,
+      height: WAVE_HEIGHT,
       waveColor: "#5b8dbb",
       // progress === wave: an editor must NOT paint the played region a
       // different (pale blue) colour — that "progress bar to the cursor"
@@ -107,6 +144,10 @@ export class AudioPlayer {
         events.onSelectionRegionUpdated?.(region.start, region.end);
         return;
       }
+      if (region.id.startsWith(MARKER_PREFIX)) {
+        events.onMarkerMoved?.(region.id.slice(MARKER_PREFIX.length), region.start);
+        return;
+      }
       const cutIndex = Number(region.id);
       if (Number.isInteger(cutIndex)) {
         events.onCutRegionUpdated?.(cutIndex, region.start, region.end);
@@ -132,9 +173,35 @@ export class AudioPlayer {
       requestAnimationFrame(() => this.emitViewport());
     });
     this.ws.on("timeupdate", (t) => {
+      // Ctrl+K preview: jump the one previewed span BEFORE the range-end
+      // check, or a preview whose post-roll is short would pause inside the
+      // span it is supposed to skip.
+      const preview = this.previewSkip;
+      if (preview && this.ws.isPlaying() && t >= preview.start && t < preview.end) {
+        if (preview.end >= this.duration - 0.02) {
+          this.previewSkip = null;
+          this.rangeEnd = null;
+          this.ws.pause(); // nothing after the cut — don't seek past the end
+        } else {
+          this.ws.setTime(preview.end);
+        }
+        return;
+      }
       if (this.rangeEnd !== null && t >= this.rangeEnd) {
         this.rangeEnd = null;
+        this.previewSkip = null;
         this.ws.pause();
+      }
+      // Scope boundary. Checked AFTER rangeEnd so a one-shot "ฟังช่วงที่เลือก"
+      // inside a scope still stops where it was asked to.
+      const scope = this.scope;
+      if (scope && this.ws.isPlaying() && t >= scope.end) {
+        if (this.loopScope) {
+          this.ws.setTime(scope.start);
+        } else {
+          this.ws.pause();
+        }
+        return;
       }
       if (this.skipCuts && this.ws.isPlaying()) {
         const skipTo = skipTarget(this.skipCuts, t);
@@ -226,6 +293,8 @@ export class AudioPlayer {
     this.loaded = false;
     this.loading = false;
     this.rangeEnd = null;
+    this.previewSkip = null;
+    this.scope = null; // a different file — the old scope is meaningless
     this.skipCuts = null;
     this.decoded = null;
     this.regions.clearRegions();
@@ -243,6 +312,8 @@ export class AudioPlayer {
     this.loaded = false;
     this.loading = true;
     this.rangeEnd = null;
+    this.previewSkip = null;
+    this.scope = null; // a different file — the old scope is meaningless
     this.skipCuts = null;
     this.maxPxPerSec = MAX_PX_PER_SEC;
     this.regions.clearRegions();
@@ -268,6 +339,8 @@ export class AudioPlayer {
     this.loaded = false;
     this.loading = true;
     this.rangeEnd = null;
+    this.previewSkip = null;
+    this.scope = null; // a different file — the old scope is meaningless
     this.skipCuts = null;
     this.decoded = null;
     this.maxPxPerSec = Math.min(MAX_PX_PER_SEC, LONG_MODE_PX_BUDGET / duration);
@@ -303,7 +376,28 @@ export class AudioPlayer {
     if (!this.loaded) return;
     this.ensureAudioRunning();
     this.rangeEnd = null; // stale range stops killed normal playback (FIXES.md #11)
+    this.previewSkip = null;
+    // Starting play from outside a locked scope would immediately run to the
+    // scope end and stop, which reads as "Space is broken". Snap in first.
+    if (this.scope && !this.ws.isPlaying()) {
+      const t = this.ws.getCurrentTime();
+      if (t < this.scope.start || t >= this.scope.end) this.ws.setTime(this.scope.start);
+    }
     void this.ws.playPause();
+  }
+
+  /** Lock playback to [start, end] ("กั้นหน้ากั้นหลัง"); null clears it. */
+  setScope(scope: { start: number; end: number } | null): void {
+    this.scope = scope;
+  }
+
+  /** Loop the locked scope instead of stopping at its end. */
+  setLoopScope(loop: boolean): void {
+    this.loopScope = loop;
+  }
+
+  get scopeRange(): { start: number; end: number } | null {
+    return this.scope;
   }
 
   pause(): void {
@@ -312,6 +406,12 @@ export class AudioPlayer {
 
   zoom(pxPerSec: number): void {
     if (this.loaded) this.ws.zoom(Math.min(pxPerSec, this.maxPxPerSec));
+  }
+
+  /** Scroll the waveform sideways by `pixels` (Shift+wheel pan). */
+  panBy(pixels: number): void {
+    if (!this.loaded) return;
+    this.ws.setScroll(Math.max(0, this.ws.getScroll() + pixels));
   }
 
   /** Deep-zoom overlay active: hide wavesurfer's own (blocky) bars so only
@@ -335,6 +435,7 @@ export class AudioPlayer {
   seekTo(seconds: number): void {
     if (!this.loaded) return;
     this.rangeEnd = null; // a manual seek always cancels the play-range stop
+    this.previewSkip = null;
     this.ws.setTime(seconds);
     // The renderer only auto-scrolls while playing — when paused, scroll the
     // viewport ourselves so the cursor is visible (with 1s of lead-in context).
@@ -348,6 +449,7 @@ export class AudioPlayer {
     if (!this.loaded) return;
     this.ensureAudioRunning();
     this.rangeEnd = null;
+    this.previewSkip = null;
     this.seekTo(seconds);
     if (!this.ws.isPlaying()) void this.ws.play();
   }
@@ -364,6 +466,19 @@ export class AudioPlayer {
   /** Test-cut mode: playback skips these regions. Pass null to hear the original. */
   setSkipCuts(cuts: readonly Cut[] | null): void {
     this.skipCuts = cuts;
+  }
+
+  /** Sound Forge's Ctrl+K "preview cut": play `preRoll` seconds of lead-in,
+   * jump over [start, end], then play `postRoll` seconds of the audio that
+   * follows — so the editor hears exactly how the join will sound BEFORE
+   * committing the cut. Nothing is modified; this is playback only. */
+  previewCut(start: number, end: number, preRoll: number, postRoll: number): void {
+    if (!this.loaded) return;
+    this.ensureAudioRunning();
+    this.seekTo(Math.max(0, start - preRoll)); // clears rangeEnd/previewSkip
+    this.previewSkip = { start, end };
+    this.rangeEnd = Math.min(this.duration, end + postRoll);
+    if (!this.ws.isPlaying()) void this.ws.play();
   }
 
   /** The regions plugin appends a drag-created region's element to the DOM at
@@ -389,7 +504,7 @@ export class AudioPlayer {
   setCutRegions(cuts: readonly Cut[]): void {
     if (!this.loaded) return;
     for (const region of [...this.regions.getRegions()]) {
-      if (region.id !== SELECTION_ID) region.remove();
+      if (region.id !== SELECTION_ID && !region.id.startsWith(MARKER_PREFIX)) region.remove();
     }
     this.sweepOrphanRegions();
     cuts.forEach((cut, i) => {
@@ -402,6 +517,23 @@ export class AudioPlayer {
         resize: true,
       });
     });
+  }
+
+  /** Draw the project's markers as draggable flags on the waveform. */
+  setMarkerRegions(markers: readonly { id: string; time: number }[]): void {
+    if (!this.loaded) return;
+    for (const region of [...this.regions.getRegions()]) {
+      if (region.id.startsWith(MARKER_PREFIX)) region.remove();
+    }
+    for (const marker of markers) {
+      this.regions.addRegion({
+        id: `${MARKER_PREFIX}${marker.id}`,
+        start: marker.time, // zero-width: the plugin renders it as a flag
+        color: MARKER_COLOR,
+        drag: true,
+        resize: false,
+      });
+    }
   }
 
   /** Blue candidate-selection region (not in the EDL until the user cuts).

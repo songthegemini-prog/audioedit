@@ -17,6 +17,27 @@ export interface Cut {
   tokenRange: [number, number] | null;
 }
 
+/** A named position on the timeline (Sound Forge "marker"), with the note the
+ * editor writes against it so it can be carried onto the cover sheet
+ * (ใบปะหน้า). Markers are pure annotation: they never affect the audio, the
+ * EDL, or the exported document text. */
+export interface Marker {
+  /** Stable across edits and re-sorts, so the note box never jumps rows. */
+  id: string;
+  time: number; // seconds
+  note: string;
+}
+
+export interface ProjectFileV3 {
+  version: 3;
+  audioPath: string;
+  transcription: TranscribeResult;
+  edits: Record<string, TokenEdit>;
+  edl: Cut[];
+  markers: Marker[];
+}
+
+/** @deprecated read-only compatibility: v2 files load, but we always write v3. */
 export interface ProjectFileV2 {
   version: 2;
   audioPath: string;
@@ -35,6 +56,8 @@ export class Project {
   dirty = false;
 
   private edits = new Map<number, TokenEdit>();
+  private markerList: Marker[] = [];
+  private nextMarkerId = 1;
   private edlList: Cut[] = [];
   private undoStack: Cut[][] = [];
   private redoStack: Cut[][] = [];
@@ -278,15 +301,54 @@ export class Project {
     return changed;
   }
 
+  // ---- markers (annotation only — never touches audio or the EDL) ----
+
+  get markers(): readonly Marker[] {
+    return this.markerList;
+  }
+
+  /** Drop a marker at `time`; returns it so the caller can focus its note. */
+  addMarker(time: number, note = ""): Marker {
+    const marker: Marker = { id: `m${this.nextMarkerId++}`, time, note };
+    this.markerList.push(marker);
+    this.markerList.sort((a, b) => a.time - b.time);
+    this.dirty = true;
+    return marker;
+  }
+
+  setMarkerNote(id: string, note: string): void {
+    const marker = this.markerList.find((m) => m.id === id);
+    if (!marker || marker.note === note) return;
+    marker.note = note;
+    this.dirty = true;
+  }
+
+  moveMarker(id: string, time: number): void {
+    const marker = this.markerList.find((m) => m.id === id);
+    if (!marker || marker.time === time) return;
+    marker.time = time;
+    this.markerList.sort((a, b) => a.time - b.time);
+    this.dirty = true;
+  }
+
+  removeMarker(id: string): boolean {
+    const before = this.markerList.length;
+    this.markerList = this.markerList.filter((m) => m.id !== id);
+    if (this.markerList.length === before) return false;
+    this.dirty = true;
+    return true;
+  }
+
   serialize(): string {
     const edits: Record<string, TokenEdit> = {};
     for (const [i, edit] of this.edits) edits[String(i)] = edit;
-    const file: ProjectFileV2 = {
-      version: 2,
+    const file: ProjectFileV3 = {
+      version: 3,
       audioPath: this.audioPath,
       transcription: this.transcription,
       edits,
       edl: this.edlList.map((c) => ({ ...c })),
+      markers: this.markerList.map((m) => ({ ...m })),
     };
     return JSON.stringify(file, null, 1);
   }
@@ -304,8 +366,9 @@ export class Project {
       transcription?: TranscribeResult;
       edits?: Record<string, TokenEdit>;
       edl?: Cut[];
+      markers?: Marker[];
     };
-    if (file.version !== 1 && file.version !== 2) {
+    if (file.version !== 1 && file.version !== 2 && file.version !== 3) {
       throw new Error(`ไฟล์โปรเจกต์เวอร์ชันไม่รองรับ: ${String(file.version)}`);
     }
     if (typeof file.audioPath !== "string" || !Array.isArray(file.transcription?.tokens)) {
@@ -329,6 +392,18 @@ export class Project {
       }
     }
     project.edlList.sort((a, b) => a.start - b.start);
+    // v1/v2 files have no markers — they load with an empty list.
+    for (const marker of file.markers ?? []) {
+      if (!Number.isFinite(marker?.time)) continue;
+      project.markerList.push({
+        // Re-mint ids rather than trusting the file: a hand-edited or merged
+        // project with duplicate ids would make note edits hit the wrong row.
+        id: `m${project.nextMarkerId++}`,
+        time: marker.time,
+        note: typeof marker.note === "string" ? marker.note : "",
+      });
+    }
+    project.markerList.sort((a, b) => a.time - b.time);
     return project;
   }
 

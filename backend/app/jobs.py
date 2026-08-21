@@ -37,6 +37,8 @@ class Job:
     script_path: Path | None = None
     out_path: Path | None = None
     edl: list[tuple[float, float]] | None = None
+    export_format: str = "wav"  # "wav" | "mp3"
+    export_bits: int | None = None  # None = keep the source's own bit depth
     status: JobStatus = JobStatus.QUEUED
     progress: float = 0.0  # 0..1
     result: dict | None = None
@@ -82,10 +84,23 @@ class JobStore:
         )
 
     def submit_export(
-        self, path: Path, out_path: Path, edl: list[tuple[float, float]]
+        self,
+        path: Path,
+        out_path: Path,
+        edl: list[tuple[float, float]],
+        export_format: str = "wav",
+        export_bits: int | None = None,
     ) -> Job:
         return self._submit(
-            Job(id=uuid.uuid4().hex, path=path, kind="export", out_path=out_path, edl=edl)
+            Job(
+                id=uuid.uuid4().hex,
+                path=path,
+                kind="export",
+                out_path=out_path,
+                edl=edl,
+                export_format=export_format,
+                export_bits=export_bits,
+            )
         )
 
     def submit_download_models(self) -> Job:
@@ -201,6 +216,8 @@ class JobStore:
             job.edl,
             on_progress=on_progress,
             check_cancelled=job.check_cancelled,
+            fmt=job.export_format,
+            bits=job.export_bits,
         )
         job.progress = 1.0
         job.status = JobStatus.DONE

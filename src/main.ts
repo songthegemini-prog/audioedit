@@ -6,20 +6,28 @@ import {
   audioInfo,
   cancelJob,
   exportDocx,
+  packProject,
   fetchPcmWindow,
   fetchPeaks,
   getJob,
   health,
+  deleteModels,
   modelsStatus,
   realign,
   startAlignScript,
   startDownloadModels,
+  compareAudio,
   startExportAudio,
   startPrepareAudio,
   startTranscribe,
 } from "./api";
-import type { AudioInfo, ExportAudioResult, TranscribeResult } from "./api";
-import { AudioPlayer, sliderToPxPerSec } from "./audio/player";
+import type {
+  AudioInfo,
+  ExportAudioResult,
+  ExportFormat,
+  TranscribeResult,
+} from "./api";
+import { AudioPlayer, WAVE_HEIGHT, cutToPreview, sliderToPxPerSec } from "./audio/player";
 import { MemorySamples, RemoteSamples, snapWithProvider } from "./audio/samples";
 import type { SampleProvider } from "./audio/samples";
 import { WaveformDetail } from "./audio/wavedetail";
@@ -59,6 +67,7 @@ function setup(): void {
   const transcribeBtn = el<HTMLButtonElement>("#transcribe-btn");
   const alignScriptBtn = el<HTMLButtonElement>("#align-script-btn");
   const exportBtn = el<HTMLButtonElement>("#export-btn");
+  const packBtn = el<HTMLButtonElement>("#pack-btn");
   const cancelJobBtn = el<HTMLButtonElement>("#cancel-job-btn");
   const reviewCountEl = el<HTMLElement>("#review-count");
   const hideFillersBtn = el<HTMLButtonElement>("#hide-fillers-btn");
@@ -78,6 +87,14 @@ function setup(): void {
   const cutBtn = el<HTMLButtonElement>("#cut-btn");
   const playSelBtn = el<HTMLButtonElement>("#play-sel-btn");
   const testCutBtn = el<HTMLButtonElement>("#testcut-btn");
+  const previewCutBtn = el<HTMLButtonElement>("#preview-cut-btn");
+  const markerBtn = el<HTMLButtonElement>("#marker-btn");
+  const markersPanel = el<HTMLElement>("#markers-panel");
+  const markerList = el<HTMLOListElement>("#marker-list");
+  const markerCount = el<HTMLElement>("#marker-count");
+  const copyMarkersBtn = el<HTMLButtonElement>("#copy-markers-btn");
+  const scopeBtn = el<HTMLButtonElement>("#scope-btn");
+  const loopBtn = el<HTMLButtonElement>("#loop-btn");
   const undoBtn = el<HTMLButtonElement>("#undo-btn");
   const redoBtn = el<HTMLButtonElement>("#redo-btn");
   const cutCount = el<HTMLElement>("#cut-count");
@@ -223,6 +240,10 @@ function setup(): void {
     }
     cutBtn.disabled = !bounds;
     playSelBtn.disabled = !bounds;
+    // Ctrl+K auditions the selection when there is one, otherwise an existing
+    // cut — so it stays live as long as either exists.
+    previewCutBtn.disabled = !bounds && (project?.edl.length ?? 0) === 0;
+    refreshScopeUi();
     syncOverlays();
   };
 
@@ -249,6 +270,7 @@ function setup(): void {
     undoBtn.disabled = !project.canUndo;
     redoBtn.disabled = !project.canRedo;
     testCutBtn.disabled = project.edl.length === 0 && !hearOriginal;
+    previewCutBtn.disabled = project.edl.length === 0 && selectionBounds === null;
     cutCount.textContent = project.edl.length
       ? `ตัดไว้ ${project.edl.length} ช่วง (ต้นฉบับไม่ถูกแก้)`
       : "";
@@ -305,6 +327,135 @@ function setup(): void {
   playSelBtn.addEventListener("click", () => {
     if (!selectionBounds) return;
     player.playRange(selectionBounds.start, selectionBounds.end);
+  });
+
+  // Sound Forge Ctrl+K = "preview cut": hear the join BEFORE committing.
+  // Pre/post-roll match Sound Forge's own defaults (Options > Preferences >
+  // Previews there); ours are fixed until someone asks to tune them.
+  const PREVIEW_PRE_ROLL_SEC = 1.5;
+  const PREVIEW_POST_ROLL_SEC = 1.5;
+
+  const previewCut = () => {
+    if (!player.isLoaded) return;
+    // A live selection is what the editor is about to cut — preview that.
+    // With no selection, audition an existing cut instead, so Ctrl+K also
+    // answers "how did the cut I already made turn out?".
+    const span = selectionBounds ?? cutToPreview(project?.edl ?? [], player.currentTime);
+    if (!span) return;
+    player.previewCut(span.start, span.end, PREVIEW_PRE_ROLL_SEC, PREVIEW_POST_ROLL_SEC);
+  };
+
+  previewCutBtn.addEventListener("click", previewCut);
+
+  // --- markers: annotate positions for the cover sheet (ใบปะหน้า) ---
+
+  /** One line per marker, in the shape the editors paste into the cover
+   * sheet. Exported by "คัดลอกรายการ" and appended to the .docx on export. */
+  const markerLines = (p: Project): string[] =>
+    p.markers.map((m) => `${formatTime(m.time)}\t${m.note}`.trimEnd());
+
+  const renderMarkers = () => {
+    const markers = project?.markers ?? [];
+    markersPanel.hidden = markers.length === 0;
+    markerCount.textContent = String(markers.length);
+    player.setMarkerRegions(markers);
+    markerList.replaceChildren(
+      ...markers.map((marker) => {
+        const row = document.createElement("li");
+        row.className = "marker-row";
+
+        const jump = document.createElement("button");
+        jump.className = "marker-time";
+        jump.textContent = formatTime(marker.time);
+        jump.title = "ไปที่จุดนี้";
+        jump.addEventListener("click", () => player.playFrom(marker.time));
+
+        const note = document.createElement("input");
+        note.className = "marker-note";
+        note.value = marker.note;
+        note.placeholder = "เขียนโน้ต… (เช่น เสียงแตก / ต้องอัดใหม่)";
+        // Save on every keystroke: an editor who types a note and immediately
+        // hits Ctrl+S must not lose it to a missing blur.
+        note.addEventListener("input", () => {
+          project?.setMarkerNote(marker.id, note.value);
+          updateDirty();
+        });
+        // Enter commits and gets out of the way; Space inside the box must NOT
+        // reach the global play/pause handler (it already guards INPUT).
+        note.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") note.blur();
+        });
+
+        const remove = document.createElement("button");
+        remove.className = "marker-remove";
+        remove.textContent = "✕";
+        remove.title = "ลบจุดนี้";
+        remove.addEventListener("click", () => {
+          if (project?.removeMarker(marker.id)) {
+            renderMarkers();
+            updateDirty();
+          }
+        });
+
+        row.append(jump, note, remove);
+        return row;
+      }),
+    );
+  };
+
+  const addMarkerHere = () => {
+    if (!project || !player.isLoaded) return;
+    const marker = project.addMarker(player.currentTime);
+    renderMarkers();
+    updateDirty();
+    // Straight into the note box — the whole point of a marker is its note.
+    const rows = markerList.querySelectorAll<HTMLInputElement>(".marker-note");
+    const index = project.markers.findIndex((m) => m.id === marker.id);
+    rows[index]?.focus();
+  };
+
+  markerBtn.addEventListener("click", addMarkerHere);
+
+  copyMarkersBtn.addEventListener("click", async () => {
+    if (!project) return;
+    await navigator.clipboard.writeText(markerLines(project).join("\n"));
+    copyMarkersBtn.textContent = "✓ คัดลอกแล้ว";
+    setTimeout(() => (copyMarkersBtn.textContent = "📋 คัดลอกรายการ"), 1500);
+  });
+
+  // --- region scope: lock the transport inside one span (Sound Forge habit) ---
+  let loopScope = false;
+
+  const refreshScopeUi = () => {
+    const scope = player.scopeRange;
+    scopeBtn.classList.toggle("active", scope !== null);
+    scopeBtn.textContent = scope
+      ? `⇥ กั้นไว้ ${scope.start.toFixed(2)}–${scope.end.toFixed(2)}s ✓`
+      : "⇥ กั้นช่วงฟัง";
+    // Looping is meaningless without a scope; drop it with the scope so the
+    // button can't sit lit while doing nothing.
+    loopBtn.disabled = scope === null;
+    loopBtn.classList.toggle("active", loopScope && scope !== null);
+    scopeBtn.disabled = scope === null && selectionBounds === null;
+  };
+
+  const toggleScope = () => {
+    if (player.scopeRange) {
+      player.setScope(null);
+    } else if (selectionBounds) {
+      player.setScope({ ...selectionBounds });
+    } else {
+      return;
+    }
+    refreshScopeUi();
+  };
+
+  scopeBtn.addEventListener("click", toggleScope);
+
+  loopBtn.addEventListener("click", () => {
+    loopScope = !loopScope;
+    player.setLoopScope(loopScope);
+    refreshScopeUi();
   });
 
   testCutBtn.addEventListener("click", () => {
@@ -372,7 +523,11 @@ function setup(): void {
     transcribeBtn.disabled = !(currentPath && player.isLoaded && backendUp && modelsReady);
     alignScriptBtn.disabled = transcribeBtn.disabled;
     const hasProject = project !== null;
+    // Markers only need a loaded file — they work before transcription, and
+    // without the backend (they are pure project data).
+    markerBtn.disabled = !hasProject || !player.isLoaded;
     exportBtn.disabled = !hasProject || !backendUp;
+    packBtn.disabled = !hasProject || !backendUp;
     saveBtn.disabled = !hasProject;
     saveAsBtn.disabled = !hasProject;
     hideFillersBtn.disabled = !hasProject;
@@ -386,6 +541,10 @@ function setup(): void {
       matchIndex = 0;
     }
   };
+
+  // The deep-zoom overlay is sized from this var, not from #waves (which also
+  // holds wavesurfer's horizontal scrollbar — 15px on Windows, 0 on macOS).
+  el("#waves").style.setProperty("--wave-height", `${WAVE_HEIGHT}px`);
 
   const player = new AudioPlayer(el("#waves"), {
     onReady: () => {
@@ -427,6 +586,13 @@ function setup(): void {
     onViewport: (start, end) => {
       spectrogram.setViewport(start, end);
       waveDetail.setViewport(start, end);
+    },
+    onMarkerMoved: (markerId, time) => {
+      project?.moveMarker(markerId, time);
+      // Re-render for the new time label and row order, but the drag already
+      // moved the flag, so this only re-syncs the list.
+      renderMarkers();
+      updateDirty();
     },
   });
 
@@ -519,6 +685,9 @@ function setup(): void {
       }
       currentPath = path;
       fileName.textContent = path;
+      loopScope = false; // the player dropped the scope; drop the loop with it
+      player.setLoopScope(false);
+      refreshScopeUi();
       return true;
     } catch (err) {
       fileName.textContent = `เปิดไฟล์ไม่สำเร็จ: ${String(err)}`;
@@ -547,6 +716,7 @@ function setup(): void {
       loaded.savePath = path;
       project = loaded;
       transcript.render(project);
+      renderMarkers();
       if (project.transcription.tokens.length === 0) {
         transcriptEl.textContent =
           "โปรเจกต์นี้ยังไม่ถอดเสียง — ตัดบน waveform หรือกดถอดเสียงได้";
@@ -593,6 +763,7 @@ function setup(): void {
       // "ตัดหยาบก่อนถอด" first pass.
       project = new Project(path, emptyTranscription());
       transcript.render(project);
+      renderMarkers();
       transcriptEl.textContent =
         "ยังไม่ถอดเสียง — ลากเลือกบน waveform เพื่อตัดหยาบได้เลย หรือกด \"ถอดเสียง (ฉบับร่าง)\"";
       showAlignNote(null);
@@ -631,6 +802,48 @@ function setup(): void {
   saveBtn.addEventListener("click", () => saveProject(false));
   saveAsBtn.addEventListener("click", () => saveProject(true));
 
+  // --- pack: one self-contained folder that moves between machines ---
+  // A bare .audioedit.json points at an ABSOLUTE audio path, so it only opens
+  // on the machine that made it. Packing copies the audio next to the project
+  // file and stores just the FILENAME, which loadProject's sibling lookup
+  // resolves against the folder it opened from (team request 2026-08-20).
+  const packProjectFolder = async () => {
+    if (!project) return;
+    const proj = project;
+    // Windows paths use "\", so the class must cover BOTH separators or the
+    // whole path ends up as the suggested folder name.
+    const base = proj.audioPath.replace(/\.[^.]+$/, "").split(/[\\/]/).pop() ?? "งาน";
+    const target = await save({
+      title: "เลือกที่เก็บโฟลเดอร์โปรเจกต์",
+      defaultPath: `${base}-project`,
+    });
+    if (!target) return;
+    packBtn.disabled = true;
+    fileName.textContent = "กำลังรวมไฟล์เข้าโฟลเดอร์โปรเจกต์…";
+    try {
+      const packed = await packProject(proj.audioPath, target);
+      // Point the SAVED copy at the bare filename. The in-memory project
+      // keeps its original absolute path, so the editor carries on against
+      // the file they already have open.
+      const originalPath = proj.audioPath;
+      proj.audioPath = packed.audio_name;
+      const json = proj.serialize();
+      proj.audioPath = originalPath;
+      await writeTextFile(`${packed.out_dir}/${base}.audioedit.json`, json);
+      const mb = (packed.bytes / 1024 ** 2).toFixed(0);
+      fileName.textContent =
+        `✅ รวมเป็นโปรเจกต์แล้ว: ${packed.out_dir} ` +
+        `(เสียง ${packed.audio_name} ${mb} MB + ไฟล์งาน) — ย้ายทั้งโฟลเดอร์ได้เลย`;
+    } catch (err) {
+      fileName.textContent = `รวมโปรเจกต์ไม่สำเร็จ: ${String(err)}`;
+    } finally {
+      packBtn.disabled = false;
+      refreshButtons();
+    }
+  };
+
+  packBtn.addEventListener("click", packProjectFolder);
+
   // งานใหม่: clear everything back to the empty state.
   const newProject = () => {
     if (project?.dirty && !window.confirm("มีการแก้ที่ยังไม่ได้บันทึก เริ่มงานใหม่เลยไหม?")) {
@@ -650,6 +863,7 @@ function setup(): void {
     zoomSlider.disabled = true;
     zoomSlider.value = "0";
     transcript.clear();
+    renderMarkers();
     // ws.empty() loads a blank URL whose "ready" never fires, so nothing
     // downstream refreshes the clock — reset it explicitly (FIXES.md #19)
     timeDisplay.textContent = "0:00.0 / 0:00.0";
@@ -700,6 +914,16 @@ function setup(): void {
       searchInput.select();
       return;
     }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+      e.preventDefault();
+      toggleScope();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      previewCut();
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey ? project?.redo() : project?.undo()) afterEdlChange();
@@ -738,6 +962,11 @@ function setup(): void {
       transcript.editToken(next); // fingers straight to the fix
       return;
     }
+    if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      addMarkerHere();
+      return;
+    }
     if ((e.key === "Delete" || e.key === "Backspace") && selection) {
       e.preventDefault();
       cutSelection();
@@ -755,13 +984,28 @@ function setup(): void {
   // --- zoom ---
   const applyZoom = () => player.zoom(sliderToPxPerSec(Number(zoomSlider.value)));
   zoomSlider.addEventListener("input", applyZoom);
+  // Sound Forge muscle memory: the bare wheel zooms. This used to require
+  // Ctrl/Cmd, which silently made the feature Mac-only — a trackpad pinch on
+  // macOS synthesises ctrlKey=true, so pinching "just worked" there, while a
+  // Windows mouse wheel sends no modifier and nothing happened (FIXES.md #35).
+  // Ctrl/Cmd+wheel still zooms so the Mac pinch keeps working.
+  // Shift+wheel (and a horizontal wheel/trackpad swipe) pans instead.
   el(".waves-scroll").addEventListener(
     "wheel",
     (e) => {
       const we = e as WheelEvent;
-      if (!we.ctrlKey && !we.metaKey) return;
-      we.preventDefault();
       if (!player.isLoaded) return;
+      // Alt+wheel keeps the panel's own vertical scroll reachable: waveform +
+      // spectrogram are ~325px tall and overflow this panel on a normal
+      // window, so hijacking EVERY wheel for zoom would strand the
+      // spectrogram off-screen with no keyboard way back.
+      if (we.altKey) return;
+      const horizontal = we.shiftKey || Math.abs(we.deltaX) > Math.abs(we.deltaY);
+      we.preventDefault();
+      if (horizontal) {
+        player.panBy(we.shiftKey ? we.deltaY || we.deltaX : we.deltaX);
+        return;
+      }
       zoomSlider.value = String(Number(zoomSlider.value) + (we.deltaY < 0 ? 4 : -4));
       applyZoom();
     },
@@ -783,6 +1027,7 @@ function setup(): void {
     }
     reviewCursor = -1;
     transcript.render(project);
+    renderMarkers();
     showAlignNote(project);
     refreshButtons();
     afterEdlChange();
@@ -899,10 +1144,18 @@ function setup(): void {
       ],
     });
     if (!scriptOut) return null;
+    // Markers ride along at the end, under a heading, so the editor can lift
+    // them straight onto the cover sheet (ใบปะหน้า) without a second export.
+    // exportLines() stays the clean CONTENT — CLAUDE.md's rule that the doc
+    // and the audio tell the same story is untouched by an appended section.
+    const lines = [...proj.exportLines()];
+    if (proj.markers.length > 0) {
+      lines.push("", "— จุดที่มาร์กไว้ —", ...markerLines(proj));
+    }
     if (scriptOut.toLowerCase().endsWith(".txt")) {
-      await writeTextFile(scriptOut, proj.exportLines().join("\n"));
+      await writeTextFile(scriptOut, lines.join("\n"));
     } else {
-      await exportDocx(scriptOut, proj.exportLines());
+      await exportDocx(scriptOut, lines);
     }
     return scriptOut;
   };
@@ -922,6 +1175,43 @@ function setup(): void {
   for (const btn of exportDialog.querySelectorAll("button")) {
     btn.addEventListener("click", () => exportDialog.close(btn.value));
   }
+
+  const verifyCheck = el<HTMLInputElement>("#export-verify-check");
+
+  /** Compare the export against the source's KEPT regions and describe the
+   * result in one line. This is the check the editors were running in a
+   * separate analyser (team feedback 2026-08-20). Never throws: a failed
+   * verification must not make a successful export look failed. */
+  const verifyLoudness = async (proj: Project, outPath: string): Promise<string> => {
+    try {
+      const cmp = await compareAudio(
+        proj.audioPath,
+        outPath,
+        proj.edl.map((c) => ({ start: c.start, end: c.end })),
+      );
+      const rms = cmp.rms_delta_db.toFixed(2);
+      const peak = cmp.peak_delta_db.toFixed(2);
+      const detail = `RMS ${rms} dB, peak ${peak} dB`;
+      if (cmp.unchanged) {
+        // Say WHY the peak moved when the source was over full scale, or the
+        // editor sees a lower peak in their analyser and doubts the verdict.
+        const note = cmp.source_over_full_scale
+          ? ` — ต้นฉบับพีคเกินเต็มสเกล (${cmp.source_peak_dbfs_raw.toFixed(2)} dBFS) ` +
+            "จึงถูกจำกัดที่ 0 dBFS ตามข้อจำกัดของ PCM ไม่ใช่การบีบอัด"
+          : " — ไม่มีการบีบอัดหรือปรับความดัง";
+        return `🔎 ตรวจแล้ว: พลังเสียงไม่เปลี่ยน (${detail})${note}`;
+      }
+      const reasons: string[] = [];
+      if (!cmp.sample_rate_match) reasons.push("sample rate ไม่ตรง");
+      if (!cmp.channels_match) reasons.push("จำนวนช่องไม่ตรง");
+      if (cmp.new_clipping) reasons.push("มีเสียงคลิป (เกินสเกล) ที่ต้นฉบับไม่มี");
+      if (Math.abs(cmp.rms_delta_db) > cmp.rms_tolerance_db) reasons.push(`RMS ต่างไป ${rms} dB`);
+      if (Math.abs(cmp.peak_delta_db) > cmp.peak_tolerance_db) reasons.push(`peak ต่างไป ${peak} dB`);
+      return `⚠️ ตรวจแล้ว: พลังเสียงเปลี่ยน — ${reasons.join(", ")}`;
+    } catch (err) {
+      return `(ตรวจพลังเสียงไม่สำเร็จ: ${String(err)} — ตัวไฟล์ export สำเร็จแล้ว)`;
+    }
+  };
 
   exportBtn.addEventListener("click", async () => {
     if (!project) return;
@@ -952,24 +1242,33 @@ function setup(): void {
     ) {
       return;
     }
-    const wavPath = await save({
-      defaultPath: `${base}-edited.wav`,
-      filters: [{ name: "WAV", extensions: ["wav"] }],
+    const format: ExportFormat = choice === "mp3" ? "mp3" : "wav";
+    const extension = format === "mp3" ? "mp3" : "wav";
+    const audioPath = await save({
+      defaultPath: `${base}-edited.${extension}`,
+      filters: [{ name: format.toUpperCase(), extensions: [extension] }],
     });
-    if (!wavPath) return;
+    if (!audioPath) return;
+    const verify = verifyCheck.checked;
     exportBtn.disabled = true;
     try {
       const jobId = await startExportAudio(
         proj.audioPath,
-        wavPath,
+        audioPath,
         proj.edl.map((c) => ({ start: c.start, end: c.end })),
+        format,
       );
       trackJob(jobId, exportBtn, "Export", "Export เสียง", fileName, async (result) => {
         const r = result as ExportAudioResult;
-        let message = `✅ Export เสียงแล้ว: ${r.out_path} (${formatTime(r.duration)})`;
+        const depth = r.bits === null ? "MP3 192kbps" : `${r.bits}-bit`;
+        let message = `✅ Export เสียงแล้ว: ${r.out_path} (${formatTime(r.duration)}, ${depth})`;
         const scriptOut = await exportScript(proj, base);
         if (scriptOut) message += ` + ${scriptOut}`;
         fileName.textContent = message;
+        if (verify) {
+          fileName.textContent = `${message} — กำลังตรวจพลังเสียง…`;
+          fileName.textContent = `${message} · ${await verifyLoudness(proj, r.out_path)}`;
+        }
       });
     } catch (err) {
       fileName.textContent = `Export ไม่สำเร็จ: ${String(err)}`;
@@ -1006,12 +1305,56 @@ function setup(): void {
   const modelsBannerText = el<HTMLElement>("#models-banner-text");
   const downloadModelsBtn = el<HTMLButtonElement>("#download-models-btn");
 
+  const modelsInfo = el<HTMLElement>("#models-info");
+  const modelsInfoText = el<HTMLElement>("#models-info-text");
+  const deleteModelsBtn = el<HTMLButtonElement>("#delete-models-btn");
+
+  const formatGb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+
   const checkModels = async () => {
     const status = await modelsStatus();
     modelsReady = status !== null && status.asr && status.align;
     modelsBanner.hidden = modelsReady || status === null;
+    // Say out loud that the models are installed, how big they are, and where
+    // — uninstalling the app leaves them behind on purpose (so updates don't
+    // re-download 4.4GB) and the team only found that out by accident
+    // (feedback 2026-08-20).
+    modelsInfo.hidden = !modelsReady || status === null;
+    if (modelsReady && status) {
+      modelsInfoText.textContent = `โมเดล AI ${formatGb(status.modelsBytes)} · ${status.modelsDir}`;
+      modelsInfoText.title =
+        "โมเดลไม่ถูกลบตอน uninstall แอป (ตั้งใจ — จะได้ไม่ต้องโหลดใหม่ทุกครั้งที่อัปเดต) " +
+        `ลบเองได้ด้วยปุ่มนี้\nโฟลเดอร์: ${status.modelsDir}`;
+    }
     refreshButtons();
   };
+
+  deleteModelsBtn.addEventListener("click", async () => {
+    const status = await modelsStatus();
+    const size = status ? formatGb(status.modelsBytes) : "";
+    if (
+      !window.confirm(
+        `ลบโมเดล AI (${size}) ออกจากเครื่อง?\n\n` +
+          'หลังลบแล้ว ปุ่ม "ถอดเสียง" และ "ตรึงบท" จะใช้ไม่ได้ ' +
+          "จนกว่าจะกดติดตั้งโมเดลใหม่ (ต้องต่อเน็ตและโหลดใหม่ทั้งหมด)\n\n" +
+          "งานที่บันทึกไว้ ไฟล์เสียง และการตัดทั้งหมด ไม่ได้รับผลกระทบ",
+      )
+    ) {
+      return;
+    }
+    deleteModelsBtn.disabled = true;
+    try {
+      const res = await deleteModels();
+      fileName.textContent = res.deleted
+        ? `✅ ลบโมเดลแล้ว คืนพื้นที่ ${formatGb(res.freedBytes)}`
+        : "ไม่พบโมเดลที่จะลบ";
+      await checkModels();
+    } catch (err) {
+      fileName.textContent = `ลบโมเดลไม่สำเร็จ: ${String(err)}`;
+    } finally {
+      deleteModelsBtn.disabled = false;
+    }
+  });
 
   downloadModelsBtn.addEventListener("click", async () => {
     downloadModelsBtn.disabled = true;

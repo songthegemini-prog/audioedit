@@ -54,6 +54,14 @@ body {
   border-color: #f85149;
 }
 
+/* Locked listening scope + its loop: blue, because unlike "ฟังต้นฉบับ" (red,
+   a temporary override of what you hear) these are a navigation state. */
+#scope-btn.active,
+#loop-btn.active {
+  background-color: #1e3a5f;
+  border-color: #508cff;
+}
+
 .cancel-btn {
   background-color: #7a2f2a !important;
   border-color: #f85149 !important;
@@ -355,6 +363,10 @@ body {
 }
 
 .statusbar {
+  /* flex so the models info can sit right-aligned via margin-left: auto */
+  display: flex;
+  align-items: center;
+  gap: 1rem;
   padding: 0.3rem 1rem;
   background-color: #232329;
   border-top: 1px solid #333;
@@ -431,9 +443,16 @@ body {
 
 .wave-detail {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: 100%;
+  /* NOT height: 100% — #waves also contains wavesurfer's horizontal
+     scrollbar, which reserves ~15px of real layout height on Windows and 0
+     on macOS. Sizing to the container made the overlay taller than the
+     waveform canvas on Windows, so the wave drew off-centre and spilled into
+     the scrollbar strip (FIXES.md #34). main.ts sets this var from
+     player.ts's WAVE_HEIGHT so the two can never drift apart. */
+  height: var(--wave-height);
   pointer-events: none;
   z-index: 5;
 }
@@ -449,4 +468,161 @@ body {
   background-color: #3d2f14;
   border-color: #c9a227;
   color: #e8d9a0;
+}
+
+/* Export dialog: the loudness check the editors asked for (team feedback
+   2026-08-20). Default-on, because the whole point is that it is routine. */
+.export-verify {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  color: #b8b8c2;
+  cursor: pointer;
+}
+
+.export-verify input {
+  cursor: pointer;
+}
+
+/* Markers: timeline annotations the editors carry onto the cover sheet
+   (ใบปะหน้า). Hidden entirely until the first marker exists, so the panel
+   never steals height from the waveform for nothing. */
+.markers-panel {
+  flex-shrink: 0;
+  max-height: 22vh;
+  overflow-y: auto;
+  padding: 0.4rem 1rem 0.6rem;
+  background-color: #232329;
+  border-top: 1px solid #333;
+}
+
+.markers-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.84rem;
+  color: #e6e6e6;
+  margin-bottom: 0.35rem;
+}
+
+.markers-hint {
+  flex: 1;
+  font-size: 0.75rem;
+  color: #8a8a95;
+}
+
+.markers-header button {
+  font-family: inherit;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  color: #e6e6e6;
+  background-color: #35353d;
+  border: 1px solid #4a4a55;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.marker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.marker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.marker-time {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  text-align: left;
+  color: #c9a227;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0;
+}
+
+.marker-time:hover {
+  text-decoration: underline;
+}
+
+.marker-note {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 0.84rem;
+  color: #e6e6e6;
+  background-color: #1b1b1f;
+  border: 1px solid #3a3a44;
+  border-radius: 4px;
+  padding: 0.2rem 0.45rem;
+}
+
+.marker-note:focus {
+  outline: none;
+  border-color: #8ab4f8;
+}
+
+.marker-remove {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: #b8b8c2;
+  background: none;
+  border: 1px solid #3a3a44;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+}
+
+.marker-remove:hover {
+  color: #f85149;
+  border-color: #f85149;
+}
+
+/* Statusbar: models are installed — say the size and location out loud.
+   Uninstalling the app deliberately leaves them behind (so an update doesn't
+   re-download 4.4GB), which surprised the team until it was made visible. */
+.models-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: #8a8a95;
+}
+
+#models-info-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#delete-models-btn {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  color: #b8b8c2;
+  background: none;
+  border: 1px solid #4a4a55;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#delete-models-btn:hover {
+  color: #f85149;
+  border-color: #f85149;
 }
