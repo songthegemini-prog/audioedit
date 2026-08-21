@@ -56,13 +56,32 @@ def align_model_dir() -> Path:
     return Path(os.environ.get("AUDIOEDIT_ALIGN_MODEL_DIR", str(DEFAULT_ALIGN_MODEL_DIR)))
 
 
-def compute_type() -> str:
-    return os.environ.get("AUDIOEDIT_COMPUTE_TYPE", "int8")
+def compute_type(device_name: str | None = None) -> str:
+    """Quantisation to run the ASR model at, matched to the device.
+
+    GPU uses int8_float16 rather than float16: measured identical speed
+    (11.1s vs 11.0s) at little more than HALF the VRAM (2.7GB vs 4.5GB) and
+    less than half the first-run warm-up. That headroom matters — the team's
+    helper laptops have 4-6GB cards, where float16 would not fit.
+    """
+    explicit = os.environ.get("AUDIOEDIT_COMPUTE_TYPE")
+    if explicit:
+        return explicit
+    return "int8_float16" if device_name == "cuda" else "int8"
 
 
 def device() -> str:
-    # Default CPU: the app ships int8 CPU models and runs on ordinary
-    # machines (no NVIDIA GPU). "auto" made CTranslate2 probe for CUDA and
-    # try to load cublas64_12.dll, which crashes Windows boxes without the
-    # CUDA runtime. Users with a GPU opt in via AUDIOEDIT_DEVICE=cuda.
-    return os.environ.get("AUDIOEDIT_DEVICE", "cpu")
+    """Which device ASR should run on.
+
+    NEVER returns CTranslate2's own "auto": that probes for CUDA and tries to
+    load cublas64_12.dll, which crashed team machines with no CUDA runtime
+    (FIXES.md #33). We decide ourselves, and only say "cuda" when the compute
+    libraries are actually present — a GPU without them is the configuration
+    that hangs, not one that falls back.
+    """
+    explicit = os.environ.get("AUDIOEDIT_DEVICE")
+    if explicit:
+        return explicit
+    from . import gpu  # local import: keeps config free of heavy deps
+
+    return "cuda" if gpu.cuda_available() else "cpu"

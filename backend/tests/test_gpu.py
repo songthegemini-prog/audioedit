@@ -1,0 +1,149 @@
+"""GPU detection and CUDA library discovery.
+
+Every test here encodes something that actually went wrong on 2026-08-21
+while proving GPU acceleration works (10.4x measured on an RTX 5060):
+
+- a GPU the driver can see is NOT a GPU we can use
+- DLLs present on disk are not DLLs Windows can find
+- only cuBLAS is required; cuDNN is 1.07GB we must not ship
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from app import gpu
+
+
+@pytest.fixture(autouse=True)
+def clear_gpu_cache(monkeypatch):
+    """enable_cuda_libraries() memoises — reset between tests."""
+    monkeypatch.setattr(gpu, "_state", None)
+    monkeypatch.delenv("AUDIOEDIT_CUDA_DIR", raising=False)
+    yield
+    monkeypatch.setattr(gpu, "_state", None)
+
+
+def make_cuda_dir(tmp_path, *, complete: bool = True):
+    d = tmp_path / "cuda"
+    d.mkdir()
+    names = gpu.REQUIRED_CUDA_DLLS if complete else gpu.REQUIRED_CUDA_DLLS[:1]
+    for name in names:
+        (d / name).write_bytes(b"not a real dll, but the right name")
+    return d
+
+
+def test_only_cublas_is_required() -> None:
+    """cuDNN was measured to be unnecessary AND slightly slower to include.
+    Shipping it would add 1.07GB to a USB stick for nothing."""
+    assert set(gpu.REQUIRED_CUDA_DLLS) == {"cublas64_12.dll", "cublasLt64_12.dll"}
+    assert not any("cudnn" in name for name in gpu.REQUIRED_CUDA_DLLS)
+
+
+def test_finds_the_libraries_via_the_env_override(tmp_path, monkeypatch) -> None:
+    d = make_cuda_dir(tmp_path)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+
+    state = gpu.enable_cuda_libraries()
+
+    assert state["found"] is True
+    assert state["dir"] == str(d)
+
+
+def test_puts_the_directory_on_path_not_just_add_dll_directory(
+    tmp_path, monkeypatch
+) -> None:
+    """The bug that cost an afternoon: os.add_dll_directory() alone is NOT
+    enough, because CTranslate2 resolves cublas with a plain LoadLibrary."""
+    d = make_cuda_dir(tmp_path)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+    monkeypatch.setenv("PATH", "C:\\existing")
+
+    gpu.enable_cuda_libraries()
+
+    assert str(d) in os.environ["PATH"]
+    assert "C:\\existing" in os.environ["PATH"]  # never clobber the old PATH
+
+
+def test_a_partial_add_on_folder_is_rejected(tmp_path, monkeypatch) -> None:
+    """Half a copy (interrupted USB transfer) must read as 'no GPU support',
+    not as a working install that fails later inside encode()."""
+    d = make_cuda_dir(tmp_path, complete=False)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+
+    assert gpu.enable_cuda_libraries()["found"] is False
+
+
+def test_missing_directory_is_not_an_error(tmp_path, monkeypatch) -> None:
+    """Booting must never raise here — a dead backend takes the app with it
+    (FIXES.md #32)."""
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(tmp_path / "nope"))
+
+    assert gpu.enable_cuda_libraries()["found"] is False
+
+
+def test_result_is_cached(tmp_path, monkeypatch) -> None:
+    d = make_cuda_dir(tmp_path)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+
+    first = gpu.enable_cuda_libraries()
+    monkeypatch.delenv("AUDIOEDIT_CUDA_DIR")
+    second = gpu.enable_cuda_libraries()
+
+    assert first is second
+
+
+def test_cuda_unavailable_without_libraries_even_with_a_gpu(
+    tmp_path, monkeypatch
+) -> None:
+    """THE core lesson. get_cuda_device_count() only asks the display driver.
+    A card with no cuBLAS is the configuration that HANGS, so it must report
+    unavailable rather than 'available, will fall back'."""
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(tmp_path / "absent"))
+
+    assert gpu.cuda_available() is False
+
+
+def test_cuda_unavailable_when_libraries_exist_but_no_device(
+    tmp_path, monkeypatch
+) -> None:
+    d = make_cuda_dir(tmp_path)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+    fake = type("m", (), {"get_cuda_device_count": staticmethod(lambda: 0)})
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", fake)
+
+    assert gpu.cuda_available() is False
+
+
+def test_cuda_available_needs_both_halves(tmp_path, monkeypatch) -> None:
+    d = make_cuda_dir(tmp_path)
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(d))
+    fake = type("m", (), {"get_cuda_device_count": staticmethod(lambda: 1)})
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", fake)
+
+    assert gpu.cuda_available() is True
+
+
+def test_status_reports_what_the_user_needs_to_fix_it(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUDIOEDIT_CUDA_DIR", str(tmp_path / "absent"))
+
+    body = gpu.status()
+
+    assert body["libraries_found"] is False
+    assert body["available"] is False
+    # The UI tells the user exactly which files to copy onto the machine.
+    assert body["required_dlls"] == list(gpu.REQUIRED_CUDA_DLLS)
+
+
+def test_status_never_raises_when_ctranslate2_is_broken(monkeypatch) -> None:
+    class Boom:
+        @staticmethod
+        def get_cuda_device_count():
+            raise RuntimeError("driver exploded")
+
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", Boom)
+
+    assert gpu.status()["available"] is False
+    assert gpu.cuda_available() is False

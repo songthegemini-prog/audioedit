@@ -1305,6 +1305,7 @@ function setup(): void {
   const modelsBannerText = el<HTMLElement>("#models-banner-text");
   const downloadModelsBtn = el<HTMLButtonElement>("#download-models-btn");
 
+  const gpuInfo = el<HTMLElement>("#gpu-info");
   const modelsInfo = el<HTMLElement>("#models-info");
   const modelsInfoText = el<HTMLElement>("#models-info-text");
   const deleteModelsBtn = el<HTMLButtonElement>("#delete-models-btn");
@@ -1319,6 +1320,30 @@ function setup(): void {
     // — uninstalling the app leaves them behind on purpose (so updates don't
     // re-download 4.4GB) and the team only found that out by accident
     // (feedback 2026-08-20).
+    // GPU line: measured 10.4x faster than CPU on an RTX 5060, so the user
+    // should be able to see at a glance which one they are getting — and,
+    // when they have a card but no add-on, what to do about it.
+    const gpu = status?.gpu;
+    gpuInfo.hidden = !modelsReady || !gpu;
+    if (gpu) {
+      if (gpu.device === "cuda") {
+        gpuInfo.textContent = "⚡ ใช้การ์ดจอ";
+        gpuInfo.className = "gpu-info gpu-on";
+        gpuInfo.title =
+          "ถอดเสียงด้วยการ์ดจอ เร็วกว่าซีพียูราว 10 เท่า\n" +
+          "ครั้งแรกหลังเปิดโปรแกรมจะช้ากว่าปกติ (เตรียมโค้ดให้เข้ากับการ์ด) — หลังจากนั้นเร็วตลอด";
+      } else if (gpu.devices > 0 && !gpu.libraries_found) {
+        // The actionable case: the hardware is there, the add-on is not.
+        gpuInfo.textContent = "🖥️ มีการ์ดจอ แต่ยังไม่ได้เปิดใช้";
+        gpuInfo.className = "gpu-info gpu-off";
+        gpuInfo.title =
+          `พบการ์ดจอ NVIDIA ${gpu.devices} ตัว แต่ยังไม่มีไฟล์เสริม\n` +
+          `ก๊อปโฟลเดอร์ "gpu-เสริม" (${gpu.required_dlls.join(", ")}) ` +
+          "ไปวางในโฟลเดอร์ที่ติดตั้งโปรแกรม แล้วเปิดใหม่ → ถอดเสียงเร็วขึ้นราว 10 เท่า";
+      } else {
+        gpuInfo.hidden = true; // no NVIDIA card: nothing useful to say
+      }
+    }
     modelsInfo.hidden = !modelsReady || status === null;
     if (modelsReady && status) {
       modelsInfoText.textContent = `โมเดล AI ${formatGb(status.modelsBytes)} · ${status.modelsDir}`;

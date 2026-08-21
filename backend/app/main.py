@@ -83,7 +83,29 @@ def models_status() -> dict:
         "dataDir": str(config.DATA_ROOT),
         "modelsDir": str(models_root),
         "modelsBytes": _dir_size_bytes(models_root),
+        # GPU acceleration is optional and opt-in via an add-on folder; the UI
+        # needs to know whether it is active to explain the speed difference.
+        "gpu": _gpu_status(),
     }
+
+
+def _gpu_status() -> dict:
+    """Never let a GPU probe break /models_status — that endpoint gates the
+    whole first-run flow (FIXES.md #32)."""
+    try:
+        from . import gpu
+
+        body = gpu.status()
+        body["device"] = _config().device()
+        return body
+    except Exception as err:  # pragma: no cover - defensive only
+        return {"available": False, "error": str(err), "device": "cpu"}
+
+
+def _config():
+    from . import config
+
+    return config
 
 
 @app.post("/delete_models")

@@ -308,7 +308,12 @@ def test_models_status_shape() -> None:
     body = client.get("/models_status").json()
     # modelsDir/modelsBytes were added so the app can tell the user where the
     # 4.4GB lives and offer to delete it (team feedback 2026-08-20).
-    assert set(body) == {"asr", "align", "dataDir", "modelsDir", "modelsBytes"}
+    assert set(body) == {"asr", "align", "dataDir", "modelsDir", "modelsBytes", "gpu"}
+    # GPU acceleration is optional; the shape must be present either way so
+    # the UI can always read it without a null check.
+    assert isinstance(body["gpu"], dict)
+    assert isinstance(body["gpu"]["available"], bool)
+    assert body["gpu"]["device"] in ("cpu", "cuda")
     assert isinstance(body["asr"], bool) and isinstance(body["align"], bool)
     assert isinstance(body["modelsDir"], str)
     assert isinstance(body["modelsBytes"], int)

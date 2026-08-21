@@ -37,6 +37,37 @@ class FasterWhisperEngine:
 
     def __init__(self) -> None:
         self._pipeline = None
+        # Which device we ended up on — "cuda" only after it PROVED it works.
+        self.device_in_use = "cpu"
+        self.gpu_error: str | None = None
+
+    def _try_gpu(self, WhisperModel, path, want: str):
+        """Build the model on the GPU and prove it can actually compute.
+
+        Constructing the model is NOT proof. On a machine with an NVIDIA
+        driver but no cuBLAS, `WhisperModel(device="cuda")` returns happily
+        and the failure only surfaces later, inside `encode()`:
+            RuntimeError: Library cublas64_12.dll is not found
+        That would strand the user with a model that loads and then breaks on
+        every transcription, so we run one tiny encode here and fall back to
+        CPU if it throws. One second of silence costs milliseconds.
+        """
+        import numpy as np
+
+        try:
+            model = WhisperModel(
+                str(path),
+                device=want,
+                compute_type=config.compute_type(want),
+            )
+            silence = np.zeros(16000, dtype=np.float32)  # 1s @ 16kHz
+            list(model.transcribe(silence, language="th", beam_size=1)[0])
+            self.device_in_use = want
+            self.gpu_error = None
+            return model
+        except Exception as err:  # any failure at all means: use the CPU
+            self.gpu_error = f"{type(err).__name__}: {err}"
+            return None
 
     def _load(self):
         if self._pipeline is None:
@@ -54,23 +85,16 @@ class FasterWhisperEngine:
                     ".venv/bin/python scripts/fetch_model.py"
                 )
             want = config.device()
-            try:
-                model = WhisperModel(
-                    str(path),
-                    device=want,
-                    compute_type=config.compute_type(),
-                    cpu_threads=config.cpu_threads(),
-                )
-            except (RuntimeError, OSError):
-                # A GPU device that can't load its CUDA libraries (e.g.
-                # cublas64_12.dll missing) must not kill transcription —
-                # fall back to CPU so the app still works everywhere.
-                if want == "cpu":
-                    raise
+            model = None
+            if want != "cpu":
+                model = self._try_gpu(WhisperModel, path, want)
+                if model is None:
+                    self.device_in_use = "cpu"
+            if model is None:
                 model = WhisperModel(
                     str(path),
                     device="cpu",
-                    compute_type="int8",
+                    compute_type=config.compute_type("cpu"),
                     cpu_threads=config.cpu_threads(),
                 )
             # Batches VAD-detected speech chunks through the model together —

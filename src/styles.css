@@ -626,3 +626,24 @@ body {
   color: #f85149;
   border-color: #f85149;
 }
+
+/* GPU acceleration indicator. Only shown when there is something worth
+   saying: either it IS accelerating (10.4x measured), or there is a card
+   sitting idle because the add-on folder has not been copied over. */
+.gpu-info {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  cursor: default;
+}
+
+.gpu-on {
+  color: #3fb950;
+  border: 1px solid #2a5c33;
+}
+
+.gpu-off {
+  color: #c9a227;
+  border: 1px solid #4a4020;
+}

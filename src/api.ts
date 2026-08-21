@@ -104,6 +104,19 @@ export async function health(): Promise<{ version: string } | null> {
   return null;
 }
 
+export interface GpuStatus {
+  /** True only when a card AND the cuBLAS libraries are both present —
+   * a card without them is the configuration that hangs, not one that
+   * falls back. */
+  available: boolean;
+  libraries_found: boolean;
+  libraries_dir: string | null;
+  devices: number;
+  required_dlls: string[];
+  /** What ASR will actually run on. */
+  device: "cpu" | "cuda";
+}
+
 export interface ModelsStatus {
   asr: boolean;
   align: boolean;
@@ -111,6 +124,7 @@ export interface ModelsStatus {
   /** Where the ~4.4GB actually lives — shown so uninstalling is not a mystery. */
   modelsDir: string;
   modelsBytes: number;
+  gpu: GpuStatus;
 }
 
 export async function modelsStatus(): Promise<ModelsStatus | null> {
