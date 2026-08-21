@@ -1030,9 +1030,52 @@ function setup(): void {
       addMarkerHere();
       return;
     }
-    if ((e.key === "Delete" || e.key === "Backspace") && selection) {
+    // Cut whatever is selected. Guarded on selectionBounds, NOT on the token
+    // selection: dragging the blue band straight on the waveform sets bounds
+    // and deliberately CLEARS the token selection, so keying off `selection`
+    // made Delete silently do nothing for exactly the Sound Forge workflow
+    // this is meant to serve (select the band, hit a key).
+    if ((e.key === "Delete" || e.key === "Backspace") && selectionBounds) {
       e.preventDefault();
       cutSelection();
+      return;
+    }
+
+    // --- Sound Forge selection keys ---------------------------------------
+    // Arrows move the cursor by ONE SCREEN PIXEL, so the step scales with
+    // zoom exactly as Sound Forge does: coarse zoomed out, sample-fine zoomed
+    // in. Shift extends the selection instead of moving.
+    if (player.isLoaded && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      const back = e.key === "ArrowLeft";
+      const pixel = 1 / Math.max(player.pixelsPerSecond, 1);
+      const step = (e.ctrlKey || e.metaKey ? 1 : pixel) * (back ? -1 : 1);
+      const clamp = (t: number) => Math.max(0, Math.min(player.duration, t));
+      if (e.shiftKey) {
+        // Grow/shrink from the playhead, like dragging the band's far edge.
+        const anchor = selectionBounds ?? { start: player.currentTime, end: player.currentTime };
+        const moved = clamp(anchor.end + step);
+        transcript.clearSelection();
+        setSelectionBounds(
+          moved <= anchor.start
+            ? { start: moved, end: anchor.start }
+            : { start: anchor.start, end: moved },
+        );
+      } else {
+        player.seekTo(clamp(player.currentTime + step));
+      }
+      return;
+    }
+    if (player.isLoaded && (e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      player.seekTo(e.key === "Home" ? 0 : player.duration);
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && player.isLoaded) {
+      e.preventDefault();
+      transcript.clearSelection();
+      setSelectionBounds({ start: 0, end: player.duration });
+      return;
     }
     // keyboard editing: click selects a word, Enter opens the edit box
     if (e.key === "Enter" && selection) {
