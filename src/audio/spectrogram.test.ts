@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildColormap, chooseFftSize, rowToBin } from "./spectrogram";
+import { buildColormap, chooseFftSize, planFrame, rowToBin } from "./spectrogram";
 
 describe("chooseFftSize", () => {
   it("keeps the window at least twice the hop", () => {
@@ -44,5 +44,28 @@ describe("buildColormap", () => {
     const darkSum = lut[0] + lut[1] + lut[2];
     const lightSum = lut[255 * 3] + lut[255 * 3 + 1] + lut[255 * 3 + 2];
     expect(lightSum).toBeGreaterThan(darkSum + 300);
+  });
+});
+
+describe("planFrame (what to paint while a PCM window is loading)", () => {
+  it("paints the new image as soon as there is one", () => {
+    expect(planFrame(true, false)).toBe("fresh");
+    expect(planFrame(true, true)).toBe("fresh");
+  });
+
+  it("holds the previous image instead of flashing black", () => {
+    // The reported symptom: every jump in long-file mode blanked the panel
+    // for a moment while the backend returned the new window.
+    expect(planFrame(false, true)).toBe("stale");
+  });
+
+  it("only shows an empty panel when there is genuinely nothing yet", () => {
+    expect(planFrame(false, false)).toBe("empty");
+  });
+
+  it("never reports stale when a fresh image exists", () => {
+    // A stale frame is drawn dimmed and shows a DIFFERENT moment of the file;
+    // preferring it over a real one would be actively misleading.
+    expect(planFrame(true, true)).not.toBe("stale");
   });
 });

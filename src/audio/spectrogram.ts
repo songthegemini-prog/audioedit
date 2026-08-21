@@ -22,6 +22,22 @@ const SEL_EDGE = "#4a90d9";
 // ---- pure helpers (unit-tested) ----
 
 /** Analysis window: at least 2x the hop for continuity, clamped 256..4096. */
+/** What to paint this frame.
+ *
+ * "stale" is the interesting one: in long-file mode the PCM for a new
+ * viewport has to come back from the backend, and THROWING AWAY the previous
+ * image while waiting made the panel flash black on every jump — a seek, a
+ * Ctrl+K preview, clicking a word (reported by the team 2026-08-21). Holding
+ * the old frame is calmer, but it shows the wrong moment in the file, so it
+ * is drawn dimmed under the loading hint and never passed off as current.
+ */
+export type FramePlan = "fresh" | "stale" | "empty";
+
+export function planFrame(hasNewImage: boolean, hasPreviousImage: boolean): FramePlan {
+  if (hasNewImage) return "fresh";
+  return hasPreviousImage ? "stale" : "empty";
+}
+
 export function chooseFftSize(hopSamples: number): number {
   let size = 256;
   while (size < hopSamples * 2 && size < 4096) size <<= 1;
@@ -97,6 +113,9 @@ export class SpectrogramView {
   private raf = 0;
 
   private drag: DragTarget | null = null;
+  /** True while `base` shows a window that no longer matches the viewport —
+   * drawn dimmed rather than thrown away, to avoid a black flash on seeks. */
+  private baseIsStale = false;
   private dragPreview: { start: number; end: number } | null = null;
   private downX = -1;
 
@@ -114,6 +133,10 @@ export class SpectrogramView {
     this.provider = provider;
     this.window = null;
     this.fetchGen++;
+    // A different file: showing the previous one's spectrum, even dimmed,
+    // would be plainly wrong. Drop it.
+    this.base = null;
+    this.baseIsStale = false;
     this.invalidateBase();
   }
 
@@ -153,11 +176,31 @@ export class SpectrogramView {
     if (!ctx) return;
 
     if (this.baseDirty) {
-      this.base = this.computeBase(width, height);
-      this.baseDirty = false;
+      const next = this.computeBase(width, height);
+      // Keep the PREVIOUS image while a fetch is in flight. Discarding it
+      // flashed the panel black on every jump in long-file mode — a seek, a
+      // Ctrl+K preview, clicking a word — because the new PCM window has to
+      // come back from the backend first. A brief stale frame is far less
+      // jarring than a strobe, and it is drawn dimmed with the loading hint
+      // so it can never be mistaken for the real spectrum at this position.
+      this.baseIsStale = planFrame(next !== null, this.base !== null) === "stale";
+      if (next !== null) {
+        this.base = next;
+        this.baseDirty = false;
+      }
     }
     if (this.base) {
-      ctx.putImageData(this.base, 0, 0);
+      if (this.baseIsStale) {
+        // dim, so nobody places a cut against a frame from somewhere else
+        ctx.fillStyle = "#101014";
+        ctx.fillRect(0, 0, width, height);
+        ctx.globalAlpha = 0.35;
+        ctx.putImageData(this.base, 0, 0);
+        ctx.globalAlpha = 1;
+        this.drawHint(ctx, width, height);
+      } else {
+        ctx.putImageData(this.base, 0, 0);
+      }
     } else {
       ctx.fillStyle = "#101014";
       ctx.fillRect(0, 0, width, height);

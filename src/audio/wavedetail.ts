@@ -103,15 +103,22 @@ export class WaveformDetail {
     }
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
-    ctx.clearRect(0, 0, width, height);
 
     const provider = this.provider;
     const span = this.viewEnd - this.viewStart;
     if (!provider || span <= 0 || span > provider.maxWindowSec) {
+      ctx.clearRect(0, 0, width, height); // wavesurfer's own bars take over
       this.setActive(false);
       return;
     }
-    if (!this.ensureWindow()) return; // fetching — stay in current state
+    // Clear ONLY once there is something to draw. Clearing up front blanked
+    // the waveform on every seek in long-file mode while the PCM window was
+    // being fetched — the same black flash the spectrogram had. Holding the
+    // previous frame for those few hundred ms is much calmer, and this
+    // overlay sits on top of wavesurfer's peaks anyway, so the view is never
+    // empty underneath.
+    if (!this.ensureWindow()) return; // fetching — leave the last frame up
+    ctx.clearRect(0, 0, width, height);
     this.setActive(true);
 
     const win = this.window!;
