@@ -1115,7 +1115,8 @@ function setup(): void {
   // Windows mouse wheel sends no modifier and nothing happened (FIXES.md #35).
   // Ctrl/Cmd+wheel still zooms so the Mac pinch keeps working.
   // Shift+wheel (and a horizontal wheel/trackpad swipe) pans instead.
-  el(".waves-scroll").addEventListener(
+  const wavesScroll = el<HTMLElement>(".waves-scroll");
+  wavesScroll.addEventListener(
     "wheel",
     (e) => {
       const we = e as WheelEvent;
@@ -1123,8 +1124,17 @@ function setup(): void {
       // Alt+wheel keeps the panel's own vertical scroll reachable: waveform +
       // spectrogram are ~325px tall and overflow this panel on a normal
       // window, so hijacking EVERY wheel for zoom would strand the
-      // spectrogram off-screen with no keyboard way back.
-      if (we.altKey) return;
+      // spectrogram off-screen with no way back.
+      //
+      // We must scroll it OURSELVES. Simply not calling preventDefault does
+      // nothing, because Chromium does not treat Alt+wheel as a scroll
+      // gesture at all — the original version returned early and the panel
+      // just sat there (reported 2026-08-21).
+      if (we.altKey) {
+        we.preventDefault();
+        wavesScroll.scrollTop += we.deltaY;
+        return;
+      }
       const horizontal = we.shiftKey || Math.abs(we.deltaX) > Math.abs(we.deltaY);
       we.preventDefault();
       if (horizontal) {
