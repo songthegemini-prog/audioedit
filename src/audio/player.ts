@@ -111,6 +111,8 @@ export interface AudioPlayerEvents {
   onCutRegionUpdated?: (cutIndex: number, start: number, end: number) => void;
   /** Right-click on a red cut band — the editor wants that cut undone. */
   onCutRegionContextMenu?: (cutIndex: number) => void;
+  /** Plain click on empty waveform — collapse any selection to a cursor. */
+  onWaveformClick?: () => void;
   /** The blue selection region's edge was dragged on the waveform. */
   onSelectionRegionUpdated?: (start: number, end: number) => void;
   /** The user drag-created a selection directly on the waveform (no words). */
@@ -309,7 +311,15 @@ export class AudioPlayer {
       const wasDrag = moved;
       from = null;
       moved = false;
-      if (!wasDrag) return; // plain click — wavesurfer's click-to-seek handles it
+      if (!wasDrag) {
+        // Plain click on empty waveform: wavesurfer seeks, and the selection
+        // collapses — the convention in every audio editor, and what the
+        // editors expected here (reported 2026-08-22). Presses that landed on
+        // a region never reach this point (pointerdown returns early), so
+        // clicking a cut band or a marker still does its own thing.
+        this.events.onWaveformClick?.();
+        return;
+      }
       // a drag must not ALSO seek: swallow the click that follows pointerup
       const swallow = (ce: MouseEvent) => {
         ce.stopPropagation();

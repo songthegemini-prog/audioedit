@@ -708,6 +708,15 @@ function setup(): void {
       selectionBounds = { start, end };
       syncOverlays();
     },
+    // Click on empty waveform = put the cursor there and drop the selection.
+    // Standard in audio editors, and without it the blue band could only be
+    // cleared with Escape or by clicking the band itself, which nobody
+    // guessed (reported 2026-08-22).
+    onWaveformClick: () => {
+      if (!selectionBounds) return;
+      transcript.clearSelection();
+      setSelectionBounds(null);
+    },
     // Drag on empty waveform = select by sound, no transcript needed
     onWaveformSelection: (start, end) => {
       transcript.clearSelection(); // drops any token-based selection first
