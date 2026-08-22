@@ -178,7 +178,23 @@ function setup(): void {
       }
     },
     onToggleExclude: (i) => {
-      project?.toggleExclude(i);
+      if (!project) return;
+      // A word shown struck-through red is CUT, not an excluded filler.
+      // Right-clicking it obviously means "give me that back", so un-cut it
+      // rather than toggling a filler flag the user cannot even see there.
+      const cutIndex = project.edl.findIndex(
+        (c) => c.tokenRange !== null && i >= c.tokenRange[0] && i <= c.tokenRange[1],
+      );
+      if (cutIndex !== -1) {
+        const cut = project.edl[cutIndex];
+        project.removeCut(cutIndex);
+        afterEdlChange();
+        fileName.textContent =
+          `↩ เอาการตัดคืนแล้ว (${formatTime(cut.start)}–${formatTime(cut.end)}) — ` +
+          "กด Ctrl+Z ถ้าอยากตัดกลับ";
+        return;
+      }
+      project.toggleExclude(i);
       transcript.refresh(i);
       updateDirty();
     },
@@ -633,6 +649,19 @@ function setup(): void {
     },
     // Manual edge drags win verbatim — never re-snap over the user's hands
     // (FIXES.md #9). Waveform and spectrogram edit the same EDL entry.
+    // Right-click a red band = take that one cut back. Undo walks the whole
+    // history backwards, which is useless when you listen through, decide
+    // against ONE cut, and want to keep everything you did after it.
+    onCutRegionContextMenu: (cutIndex) => {
+      if (!project) return;
+      const cut = project.edl[cutIndex];
+      if (!cut) return;
+      project.removeCut(cutIndex);
+      afterEdlChange();
+      fileName.textContent =
+        `↩ เอาการตัดคืนแล้ว (${formatTime(cut.start)}–${formatTime(cut.end)}) — ` +
+        "กด Ctrl+Z ถ้าอยากตัดกลับ";
+    },
     onCutRegionUpdated: (cutIndex, start, end) => {
       if (!project) return;
       project.updateCutBounds(cutIndex, start, end);

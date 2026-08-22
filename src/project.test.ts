@@ -397,3 +397,52 @@ describe("markers (annotation for the cover sheet)", () => {
     expect(Project.parse(JSON.stringify(file)).markers).toHaveLength(1);
   });
 });
+
+describe("taking back one specific cut", () => {
+  const projectWithCuts = (): Project => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 1, end: 2, tokenRange: null });
+    p.addCut({ start: 5, end: 6, tokenRange: null });
+    p.addCut({ start: 9, end: 10, tokenRange: null });
+    return p;
+  };
+
+  it("removes the chosen cut and keeps every later one", () => {
+    // The whole point: undo walks backwards, which is useless when you listen
+    // through, change your mind about ONE cut, and want to keep the rest.
+    const p = projectWithCuts();
+    p.removeCut(1);
+    expect(p.edl.map((c) => c.start)).toEqual([1, 9]);
+  });
+
+  it("is undoable, so a mis-click restores the cut", () => {
+    const p = projectWithCuts();
+    p.removeCut(0);
+    expect(p.edl).toHaveLength(2);
+    expect(p.undo()).toBe(true);
+    expect(p.edl.map((c) => c.start)).toEqual([1, 5, 9]);
+  });
+
+  it("ignores an out-of-range index instead of corrupting the list", () => {
+    const p = projectWithCuts();
+    p.removeCut(99);
+    p.removeCut(-1);
+    expect(p.edl.map((c) => c.start)).toEqual([1, 5, 9]);
+  });
+
+  it("does not burn an undo step on an out-of-range index", () => {
+    // A no-op that still pushed history would make the next Ctrl+Z appear to
+    // do nothing, which reads as "undo is broken".
+    const p = projectWithCuts();
+    p.removeCut(99);
+    p.undo();
+    expect(p.edl.map((c) => c.start)).toEqual([1, 5]); // undid the 3rd addCut
+  });
+
+  it("marks the project dirty so the change gets saved", () => {
+    const p = projectWithCuts();
+    p.dirty = false;
+    p.removeCut(0);
+    expect(p.dirty).toBe(true);
+  });
+});

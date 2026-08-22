@@ -72,6 +72,8 @@ export interface AudioPlayerEvents {
   onPlayState?: (playing: boolean) => void;
   /** A cut region's edge was dragged on the waveform. */
   onCutRegionUpdated?: (cutIndex: number, start: number, end: number) => void;
+  /** Right-click on a red cut band — the editor wants that cut undone. */
+  onCutRegionContextMenu?: (cutIndex: number) => void;
   /** The blue selection region's edge was dragged on the waveform. */
   onSelectionRegionUpdated?: (start: number, end: number) => void;
   /** The user drag-created a selection directly on the waveform (no words). */
@@ -508,7 +510,7 @@ export class AudioPlayer {
     }
     this.sweepOrphanRegions();
     cuts.forEach((cut, i) => {
-      this.regions.addRegion({
+      const region = this.regions.addRegion({
         id: String(i),
         start: cut.start,
         end: cut.end,
@@ -516,6 +518,16 @@ export class AudioPlayer {
         drag: false,
         resize: true,
       });
+      // Right-click a red band to take that ONE cut back. Undo only walks
+      // the history backwards, so without this there was no way to change
+      // your mind about a cut you made twenty cuts ago (reported 2026-08-21).
+      const element = (region as unknown as { element?: HTMLElement }).element;
+      element?.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.events.onCutRegionContextMenu?.(i);
+      });
+      if (element) element.title = "คลิกขวาเพื่อเอาการตัดนี้คืน";
     });
   }
 
