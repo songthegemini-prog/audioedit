@@ -744,3 +744,11 @@ body {
   font-size: 0.8rem;
   color: #8a8a95;
 }
+
+/* Fine-tune bar hint: the ±1ms/±10ms buttons always work, but below about
+   100 px/s a step is smaller than a pixel and the screen looks frozen. */
+.fine-hint {
+  margin-left: 0.6rem;
+  font-size: 0.75rem;
+  color: #c9a227;
+}

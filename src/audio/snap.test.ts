@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clampCutBounds, snapCutPoint } from "./snap";
+import { clampCutBounds, fineStepVisibility, snapCutPoint } from "./snap";
 
 const SR = 1000; // 1kHz keeps the numbers easy to reason about
 
@@ -79,5 +79,38 @@ describe("clampCutBounds", () => {
   it("keeps start <= end even when clamps collide", () => {
     const [start, end] = clampCutBounds(1.0, 2.0, 1.9, 1.1, 10);
     expect(start).toBeLessThanOrEqual(end);
+  });
+});
+
+describe("fineStepVisibility (can you see a ±1ms press?)", () => {
+  it("says a 1ms step is invisible at the default zoom", () => {
+    // 20 px/s is where the app starts. This is the reported bug: the value
+    // changes on every press but the screen does not move, so the buttons
+    // feel broken.
+    const v = fineStepVisibility(20, 0.001);
+    expect(v.visible).toBe(false);
+    expect(v.pixels).toBeCloseTo(0.02, 5);
+    expect(v.pressesPerPixel).toBe(50);
+  });
+
+  it("says a 10ms step is still invisible at the default zoom", () => {
+    expect(fineStepVisibility(20, 0.01).visible).toBe(false);
+  });
+
+  it("becomes visible once zoomed in", () => {
+    expect(fineStepVisibility(980, 0.001).visible).toBe(false); // 0.98px, just under
+    expect(fineStepVisibility(980, 0.01).visible).toBe(true); // 9.8px
+    expect(fineStepVisibility(8365, 0.001).visible).toBe(true); // 8.4px
+  });
+
+  it("needs exactly one press per pixel once a step exceeds a pixel", () => {
+    expect(fineStepVisibility(8365, 0.001).pressesPerPixel).toBe(1);
+  });
+
+  it("does not divide by zero before the zoom is known", () => {
+    const v = fineStepVisibility(0, 0.01);
+    expect(v.pixels).toBe(0);
+    expect(v.visible).toBe(false);
+    expect(Number.isFinite(v.pressesPerPixel)).toBe(false);
   });
 });

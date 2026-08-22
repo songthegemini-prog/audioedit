@@ -110,3 +110,24 @@ export function clampCutBounds(
   if (end < start) [start, end] = [Math.min(start, end), Math.max(start, end)];
   return [start, end];
 }
+
+/** Can the user actually SEE a fine-tune step at this zoom?
+ *
+ * The ±1ms / ±10ms buttons always move the boundary by exactly their amount,
+ * but at the default zoom (20 px/s) one millisecond is 0.02 of a pixel — it
+ * takes 50 presses to shift the edge by a single pixel, so the screen looks
+ * frozen and the buttons feel broken (reported 2026-08-22). Telling the user
+ * to zoom in is the honest fix; making the step bigger would destroy the
+ * precision the buttons exist for.
+ */
+export function fineStepVisibility(
+  pxPerSec: number,
+  stepSec: number,
+): { pixels: number; pressesPerPixel: number; visible: boolean } {
+  const pixels = Math.max(0, pxPerSec) * stepSec;
+  return {
+    pixels,
+    pressesPerPixel: pixels > 0 ? Math.max(1, Math.ceil(1 / pixels)) : Infinity,
+    visible: pixels >= 1,
+  };
+}

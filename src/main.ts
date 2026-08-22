@@ -31,7 +31,7 @@ import { AudioPlayer, WAVE_HEIGHT, cutToPreview, sliderToPxPerSec } from "./audi
 import { MemorySamples, RemoteSamples, snapWithProvider } from "./audio/samples";
 import type { SampleProvider } from "./audio/samples";
 import { WaveformDetail } from "./audio/wavedetail";
-import { clampCutBounds, snapCutPoint } from "./audio/snap";
+import { clampCutBounds, fineStepVisibility, snapCutPoint } from "./audio/snap";
 import { SpectrogramView } from "./audio/spectrogram";
 import { Project } from "./project";
 import { buildSearchIndex, findMatches } from "./search";
@@ -252,6 +252,21 @@ function setup(): void {
   const fineBar = el<HTMLElement>("#fine-bar");
   const fineStart = el<HTMLElement>("#fine-start");
   const fineEnd = el<HTMLElement>("#fine-end");
+  const fineHint = el<HTMLElement>("#fine-hint");
+
+  /** Say so when a fine-tune press is too small to see at this zoom. The
+   * buttons always move the boundary exactly; at 20 px/s one millisecond is
+   * 0.02 of a pixel, so the screen does not visibly change and the buttons
+   * feel dead. */
+  const refreshFineHint = () => {
+    const step = fineStepVisibility(player.pixelsPerSecond, 0.01); // the ±10ms step
+    fineHint.hidden = fineBar.hidden || step.visible;
+    if (!fineHint.hidden) {
+      fineHint.textContent =
+        `ซูมเข้าเพื่อเห็นการขยับ — ตอนนี้ 10ms ≈ ${step.pixels.toFixed(2)} พิกเซล ` +
+        "(ตัวเลขเปลี่ยนทุกครั้งที่กด แต่ภาพยังไม่ขยับ)";
+    }
+  };
 
   const emptyTranscription = (): TranscribeResult => ({
     text: "",
@@ -269,6 +284,7 @@ function setup(): void {
       fineStart.textContent = `${selectionBounds.start.toFixed(3)}s`;
       fineEnd.textContent = `${selectionBounds.end.toFixed(3)}s`;
     }
+    refreshFineHint();
   };
 
   const setSelectionBounds = (bounds: { start: number; end: number } | null) => {
@@ -1162,7 +1178,10 @@ function setup(): void {
   });
 
   // --- zoom ---
-  const applyZoom = () => player.zoom(sliderToPxPerSec(Number(zoomSlider.value)));
+  const applyZoom = () => {
+    player.zoom(sliderToPxPerSec(Number(zoomSlider.value)));
+    refreshFineHint();
+  };
   zoomSlider.addEventListener("input", applyZoom);
   // Sound Forge muscle memory: the bare wheel zooms. This used to require
   // Ctrl/Cmd, which silently made the feature Mac-only — a trackpad pinch on
