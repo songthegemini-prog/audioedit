@@ -44,6 +44,27 @@ const JOB_POLL_MS = 1000;
 
 const AUDIO_EXTENSIONS = ["wav", "mp3", "m4a", "flac", "ogg", "aac", "opus"];
 
+/** Does this event mean Ctrl/Cmd + <letter>, whatever keyboard layout the
+ * user is on?
+ *
+ * `e.key` reports the CHARACTER the layout produces: on the Thai layout the
+ * physical Z key gives "ผ", so `e.key === "z"` silently failed and EVERY
+ * Ctrl shortcut in this Thai-first app stopped working the moment the editor
+ * switched to Thai to type (FIXES.md #39). `e.code` is the physical key and
+ * ignores the layout; `e.key` is kept as a fallback for Latin layouts that
+ * move keys around (Dvorak, AZERTY).
+ */
+function isChord(e: KeyboardEvent, letter: string): boolean {
+  if (!e.metaKey && !e.ctrlKey) return false;
+  return e.code === `Key${letter.toUpperCase()}` || e.key.toLowerCase() === letter;
+}
+
+/** Same layout problem, for a shortcut with no modifier (M drops a marker). */
+function isPlainKey(e: KeyboardEvent, letter: string): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  return e.code === `Key${letter.toUpperCase()}` || e.key.toLowerCase() === letter;
+}
+
 function el<T extends HTMLElement>(selector: string): T {
   const found = document.querySelector<T>(selector);
   if (!found) throw new Error(`missing element: ${selector}`);
@@ -1005,28 +1026,33 @@ function setup(): void {
 
   playBtn.addEventListener("click", () => player.playPause());
   window.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    if (isChord(e, "s")) {
       e.preventDefault();
       saveProject();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+    if (isChord(e, "f")) {
       e.preventDefault();
       searchInput.focus();
       searchInput.select();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+    if (isChord(e, "l")) {
       e.preventDefault();
       toggleScope();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    if (isChord(e, "k")) {
       e.preventDefault();
       previewCut();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+    if (isChord(e, "z")) {
+      // While typing, Ctrl+Z belongs to the TEXT, not to the audio edits.
+      // Hijacking it in the search box or a note field meant a typo could
+      // only be fixed by hand while an unrelated cut got undone instead.
+      const typing = (e.target as HTMLElement | null)?.tagName;
+      if (typing === "INPUT" || typing === "TEXTAREA") return;
       e.preventDefault();
       if (e.shiftKey ? project?.redo() : project?.undo()) afterEdlChange();
       return;
@@ -1073,7 +1099,7 @@ function setup(): void {
       transcript.editToken(next); // fingers straight to the fix
       return;
     }
-    if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (isPlainKey(e, "m")) {
       e.preventDefault();
       addMarkerHere();
       return;
@@ -1119,7 +1145,7 @@ function setup(): void {
       player.seekTo(e.key === "Home" ? 0 : player.duration);
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && player.isLoaded) {
+    if (isChord(e, "a") && player.isLoaded) {
       e.preventDefault();
       transcript.clearSelection();
       setSelectionBounds({ start: 0, end: player.duration });
