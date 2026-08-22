@@ -38,6 +38,35 @@ export function planFrame(hasNewImage: boolean, hasPreviousImage: boolean): Fram
   return hasPreviousImage ? "stale" : "empty";
 }
 
+/** The PCM range to fetch for a viewport.
+ *
+ * Deliberately WIDER than the viewport. Fetching exactly what is on screen
+ * meant that during playback — where the view scrolls continuously — the
+ * viewport left the fetched window almost immediately, every frame started a new
+ * request that superseded the last, and the picture never finished loading
+ * at all: the spectrogram simply read "กำลังโหลด" for the whole play
+ * (reported 2026-08-21). Padding buys enough scroll to outlast a round trip.
+ *
+ * The result never exceeds `maxWindowSec` (what the provider can return in
+ * one call) and never runs past the file.
+ */
+export function windowRangeFor(
+  viewStart: number,
+  viewEnd: number,
+  marginSec: number,
+  maxWindowSec: number,
+  durationSec: number,
+): { from: number; to: number } {
+  const span = Math.max(0, viewEnd - viewStart);
+  const needed = span + 2 * marginSec;
+  // spend whatever headroom the provider allows, up to a viewport on each side
+  const pad = Math.max(0, Math.min(span, (maxWindowSec - needed) / 2));
+  return {
+    from: Math.max(0, viewStart - marginSec - pad),
+    to: Math.min(durationSec, viewEnd + marginSec + pad),
+  };
+}
+
 export function chooseFftSize(hopSamples: number): number {
   let size = 256;
   while (size < hopSamples * 2 && size < 4096) size <<= 1;
@@ -235,9 +264,15 @@ export class SpectrogramView {
     const sr = provider.sampleRate;
     const hop = (span * sr) / Math.max(width, 1);
     const marginSec = (chooseFftSize(hop) / 2 + 1) / sr;
-    // the file's edges bound what any window can ever cover
-    const needFrom = Math.max(0, this.viewStart - marginSec);
-    const needTo = Math.min(provider.durationSec, this.viewEnd + marginSec);
+    // Fetch wider than the viewport so playback can scroll for a while
+    // before another round trip is needed.
+    const { from: needFrom, to: needTo } = windowRangeFor(
+      this.viewStart,
+      this.viewEnd,
+      marginSec,
+      provider.maxWindowSec,
+      provider.durationSec,
+    );
     const w = this.window;
     if (
       w &&

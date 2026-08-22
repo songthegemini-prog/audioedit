@@ -11,6 +11,7 @@
  */
 
 import type { SampleProvider, SampleWindow } from "./samples";
+import { windowRangeFor } from "./spectrogram";
 
 const WAVE_COLOR = "#8ab4f8"; // matches the app's progress-side waveform blue
 const CENTER_LINE = "rgba(138, 180, 248, 0.35)";
@@ -161,8 +162,16 @@ export class WaveformDetail {
   /** Same gating pattern as SpectrogramView.ensureWindow. */
   private ensureWindow(): boolean {
     const provider = this.provider!;
-    const needFrom = Math.max(0, this.viewStart);
-    const needTo = Math.min(provider.durationSec, this.viewEnd);
+    // Same widening as the spectrogram: fetching exactly the viewport made
+    // playback refetch on every frame and never settle. No FFT margin needed
+    // here — this draws raw min/max per pixel.
+    const { from: needFrom, to: needTo } = windowRangeFor(
+      this.viewStart,
+      this.viewEnd,
+      0,
+      provider.maxWindowSec,
+      provider.durationSec,
+    );
     const w = this.window;
     if (
       w &&
