@@ -45,6 +45,26 @@ export function cutToPreview(cuts: readonly Cut[], t: number): Cut | null {
   return ordered.find((c) => c.start > t) ?? ordered[ordered.length - 1];
 }
 
+/** Where to scroll the view so `target` lands in the MIDDLE, not jammed
+ * against the left edge.
+ *
+ * Returns the time that should sit at the view's left edge. The old code
+ * used `target - 1`, i.e. one second of lead-in — but the view is ~60s wide
+ * at the default zoom, so the word you clicked appeared about 2% from the
+ * left with the rest of the screen showing what comes after it (reported
+ * 2026-08-22). Centring puts equal context on both sides, which is what you
+ * want when judging where a cut should go.
+ *
+ * Clamped at both ends so the view never scrolls past the file: near the
+ * start the target simply sits left of centre, near the end, right of it.
+ * Pure, so it's unit-tested.
+ */
+export function scrollTimeFor(target: number, visibleSpan: number, duration: number): number {
+  if (!(visibleSpan > 0)) return Math.max(0, target);
+  const lastScrollable = Math.max(0, duration - visibleSpan);
+  return Math.min(Math.max(0, target - visibleSpan / 2), lastScrollable);
+}
+
 /** When playback reaches time `t`, the time to jump to so cut audio is
  * skipped — or null if `t` isn't inside any cut. Jumps past the WHOLE run of
  * overlapping/adjacent cuts so no sliver of a merged cut plays for a frame,
@@ -440,9 +460,9 @@ export class AudioPlayer {
     this.previewSkip = null;
     this.ws.setTime(seconds);
     // The renderer only auto-scrolls while playing — when paused, scroll the
-    // viewport ourselves so the cursor is visible (with 1s of lead-in context).
+    // viewport ourselves so the cursor is visible, CENTRED.
     if (!this.ws.isPlaying()) {
-      this.ws.setScrollTime(Math.max(0, seconds - 1));
+      this.ws.setScrollTime(scrollTimeFor(seconds, this.visibleSpanSec, this.duration));
     }
   }
 
@@ -574,6 +594,12 @@ export class AudioPlayer {
   samples(): { data: Float32Array; sampleRate: number } | null {
     if (!this.decoded) return null;
     return { data: this.decoded.getChannelData(0), sampleRate: this.decoded.sampleRate };
+  }
+
+  /** Width of the visible window in seconds, from the real element width. */
+  private get visibleSpanSec(): number {
+    const viewportPx = this.ws.getWrapper().parentElement?.clientWidth ?? 0;
+    return viewportPx / this.pxPerSec;
   }
 
   /** Current horizontal zoom. Sound Forge's arrow keys move by one screen
