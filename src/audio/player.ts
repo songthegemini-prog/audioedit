@@ -65,6 +65,23 @@ export function scrollTimeFor(target: number, visibleSpan: number, duration: num
   return Math.min(Math.max(0, target - visibleSpan / 2), lastScrollable);
 }
 
+/** How much lead-in a Ctrl+K preview should play before the seam.
+ *
+ * A fixed 1.5s looked fine zoomed out and broke zoomed in: at 980 px/s the
+ * view is only ~1.3 SECONDS wide, so starting 1.5s early put the seam off the
+ * right edge entirely and the whole view appeared to jump somewhere unrelated
+ * (reported 2026-08-22). Tying the roll to the visible span keeps the
+ * playhead and the seam on screen together at every zoom, which is the entire
+ * point of watching a preview.
+ *
+ * Floor of 0.25s so there is still audible run-up at extreme zoom; ceiling of
+ * 1.5s so zoomed-out previews do not become a long wait.
+ */
+export function previewRollFor(visibleSpanSec: number): number {
+  if (!(visibleSpanSec > 0)) return 1.5;
+  return Math.min(1.5, Math.max(0.25, visibleSpanSec * 0.35));
+}
+
 /** When playback reaches time `t`, the time to jump to so cut audio is
  * skipped — or null if `t` isn't inside any cut. Jumps past the WHOLE run of
  * overlapping/adjacent cuts so no sliver of a merged cut plays for a frame,
@@ -494,10 +511,24 @@ export class AudioPlayer {
    * jump over [start, end], then play `postRoll` seconds of the audio that
    * follows — so the editor hears exactly how the join will sound BEFORE
    * committing the cut. Nothing is modified; this is playback only. */
-  previewCut(start: number, end: number, preRoll: number, postRoll: number): void {
+  previewCut(start: number, end: number, maxPreRoll: number, maxPostRoll: number): void {
     if (!this.loaded) return;
     this.ensureAudioRunning();
-    this.seekTo(Math.max(0, start - preRoll)); // clears rangeEnd/previewSkip
+    // Shrink the roll when zoomed in so the seam stays on screen.
+    const fit = previewRollFor(this.visibleSpanSec);
+    const preRoll = Math.min(maxPreRoll, fit);
+    const postRoll = Math.min(maxPostRoll, fit);
+    this.rangeEnd = null;
+    this.previewSkip = null;
+    this.ws.setTime(Math.max(0, start - preRoll));
+    // Centre the view on the SEAM, not on where playback starts. seekTo()
+    // centres on the playhead, which put the join well right of centre and
+    // made the whole view look like it had jumped somewhere else. The join is
+    // the thing being judged, so it belongs in the middle with the playhead
+    // running into it from the left.
+    if (!this.ws.isPlaying()) {
+      this.ws.setScrollTime(scrollTimeFor(start, this.visibleSpanSec, this.duration));
+    }
     this.previewSkip = { start, end };
     this.rangeEnd = Math.min(this.duration, end + postRoll);
     if (!this.ws.isPlaying()) void this.ws.play();
