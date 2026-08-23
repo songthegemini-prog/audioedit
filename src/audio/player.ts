@@ -163,6 +163,19 @@ export class AudioPlayer {
       cursorColor: "#f0f0f0",
       minPxPerSec: MIN_PX_PER_SEC,
       autoScroll: true,
+      // Let the cursor TRAVEL across the view and scroll only when it reaches
+      // the edge — the way every audio editor behaves, and what the team
+      // means by "the cursor flows".
+      //
+      // wavesurfer defaults autoCenter to TRUE, which pins the cursor to the
+      // middle and slides the waveform underneath it as soon as the cursor
+      // passes centre. That was survivable while seekTo() left the cursor near
+      // the left edge, because it had most of a screen to travel first. Once
+      // seeks started centring the target (FIXES.md #41) the cursor arrived
+      // already centred and froze on the spot — and the viewport then changed
+      // on EVERY frame, so the spectrogram recomputed continuously and never
+      // finished drawing (FIXES.md #44).
+      autoCenter: false,
       // scale the waveform to the file's own peak — quiet recordings stay readable
       normalize: true,
       // Playback uses the default media element, fed with a WAV re-encoded
