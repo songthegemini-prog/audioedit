@@ -26,6 +26,8 @@ export class TranscriptView {
   private editing = false;
   private editingIndex = -1; // which span holds the open edit box (-1 = segment box)
   private editorEl: HTMLElement | null = null; // the live input/textarea
+  /** How to close the live editor, so a new edit request can supersede it. */
+  private closeEditor: ((commit: boolean) => void) | null = null;
   private searchTokens = new Set<number>();
   private currentSearchTokens = new Set<number>();
   private anchor: number | null = null; // last plain-clicked token (shift+click end)
@@ -107,6 +109,8 @@ export class TranscriptView {
     this.editing = false;
     this.editingIndex = -1;
     this.editorEl = null;
+    // and drop its closer: it captures DOM that is about to be thrown away
+    this.closeEditor = null;
     this.container.textContent = "";
     const frag = document.createDocumentFragment();
     const segments = project.transcription.segments;
@@ -158,7 +162,8 @@ export class TranscriptView {
   }
 
   private startSegmentEdit(segIndex: number, block: HTMLElement): void {
-    if (!this.project || this.editingActive()) return;
+    if (!this.project) return;
+    this.finishOpenEditor(); // never silently ignore an edit request
     this.editing = true;
     this.editingIndex = -1; // segment box lives in the block, not a span
     this.callbacks.onEditStart();
@@ -183,6 +188,7 @@ export class TranscriptView {
         this.render(this.project); // cancelled — restore the block
       }
     };
+    this.closeEditor = finish;
     textarea.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -340,12 +346,38 @@ export class TranscriptView {
       this.editing = false;
       this.editingIndex = -1;
       this.editorEl = null;
+      this.closeEditor = null;
     }
     return this.editing;
   }
 
+  /** Close whatever edit box is open, committing it, so a NEW edit can start.
+   *
+   * Refusing to open a second editor used to mean the pencil and
+   * double-click just did nothing at all — and the box holding things up can
+   * easily be off-screen (the Tab review queue opens one wherever the queue
+   * points, and Escape only reaches it while it still has focus). The user
+   * then sees a transcript that cannot be edited and no reason why
+   * (FIXES.md #45). An explicit request to edit must always win.
+   */
+  private finishOpenEditor(): void {
+    if (!this.editingActive()) return;
+    const close = this.closeEditor;
+    this.closeEditor = null;
+    if (close) {
+      close(true); // commit — the user typed it, do not throw it away
+    } else {
+      // no closer recorded (should not happen): drop the latch rather than
+      // leave editing permanently blocked
+      this.editing = false;
+      this.editingIndex = -1;
+      this.editorEl = null;
+    }
+  }
+
   private startEdit(i: number, span: HTMLSpanElement): void {
-    if (!this.project || this.editingActive()) return;
+    if (!this.project) return;
+    this.finishOpenEditor(); // never silently ignore an edit request
     this.editing = true;
     this.editingIndex = i;
     this.callbacks.onEditStart();
@@ -378,6 +410,7 @@ export class TranscriptView {
       }
       e.stopPropagation(); // keep spacebar from toggling playback while typing
     });
+    this.closeEditor = finish;
     input.addEventListener("blur", () => finish(true));
   }
 }

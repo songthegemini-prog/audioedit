@@ -1514,6 +1514,19 @@ function setup(): void {
         }
       ).audioContext?.state,
     time: () => player.currentTime,
+    // Load a saved project WITHOUT Tauri's fs, so transcript behaviour
+    // (editing, selection, cutting) can be exercised in a plain browser —
+    // the packaged app is the only other place a project can exist, and it
+    // has no devtools.
+    loadProjectJson: (json: string) => {
+      project = Project.parse(json);
+      transcript.render(project);
+      renderMarkers();
+      showAlignNote(project);
+      afterEdlChange();
+      refreshButtons();
+      return project.transcription.tokens.length;
+    },
     // long-file mode is pure HTTP (no Tauri fs), so it's testable in a browser
     loadPath: (path: string) => loadAudio(path),
   };
