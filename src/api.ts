@@ -59,6 +59,11 @@ export interface Loudness {
   channels: number;
   frames: number;
   clipped_samples: number;
+  /** ITU-R BS.1770-4 integrated loudness — the figure RX and SpectraLayers
+   * show, and the only one directly comparable with them. */
+  lufs: number;
+  true_peak: number;
+  true_peak_dbtp: number;
 }
 
 export interface LoudnessComparison {
@@ -76,6 +81,13 @@ export interface LoudnessComparison {
   unchanged: boolean;
   rms_tolerance_db: number;
   peak_tolerance_db: number;
+  lufs_delta_db: number;
+  true_peak_delta_db: number;
+  lufs_tolerance_db: number;
+  /** True when the source figures cover only the KEPT regions. They have to,
+   * to be comparable with the export — but it means whole-file numbers read
+   * off the untouched original in RX will legitimately differ. */
+  source_measured_through_cuts: boolean;
 }
 
 export interface JobState {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildColormap,
   chooseFftSize,
+  MIN_FFT_SIZE,
   planFrame,
   rowToBin,
   windowRangeFor,
@@ -10,14 +11,29 @@ import {
 
 describe("chooseFftSize", () => {
   it("keeps the window at least twice the hop", () => {
-    expect(chooseFftSize(100)).toBe(256);
-    expect(chooseFftSize(200)).toBe(512);
     expect(chooseFftSize(900)).toBe(2048);
+    expect(chooseFftSize(1100)).toBe(4096);
   });
 
-  it("clamps to the 256..4096 range", () => {
-    expect(chooseFftSize(0.5)).toBe(256); // sample-level zoom: tiny hop
+  it("clamps to the 1024..4096 range", () => {
+    expect(chooseFftSize(0.5)).toBe(MIN_FFT_SIZE); // sample-level zoom
     expect(chooseFftSize(1e6)).toBe(4096); // whole-file view: huge hop
+  });
+
+  it("never drops below the floor, however deep the zoom", () => {
+    // The regression the team saw: at a 2-second view the hop falls to ~74
+    // samples, the window bottomed out at 256, and 44.1kHz / 256 is 172Hz per
+    // band — wide enough to swallow a whole vocal fundamental. Anything at or
+    // under 1024 must now return the floor.
+    for (const hop of [0.1, 1, 37, 74, 184, 512]) {
+      expect(chooseFftSize(hop)).toBe(MIN_FFT_SIZE);
+    }
+  });
+
+  it("gives at least 50Hz resolution at the deepest useful zoom", () => {
+    // The property that actually matters, stated in Hz rather than in taps.
+    const sampleRate = 44100;
+    expect(sampleRate / chooseFftSize(37)).toBeLessThan(50);
   });
 });
 

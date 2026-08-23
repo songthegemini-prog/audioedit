@@ -19,9 +19,11 @@ const CUT_EDGE = "#f85149";
 const SEL_FILL = "rgba(80, 140, 255, 0.30)";
 const SEL_EDGE = "#4a90d9";
 
+/** How far the previous frame is knocked back while a new one loads. */
+export const STALE_FRAME_ALPHA = 0.35;
+
 // ---- pure helpers (unit-tested) ----
 
-/** Analysis window: at least 2x the hop for continuity, clamped 256..4096. */
 /** What to paint this frame.
  *
  * "stale" is the interesting one: in long-file mode the PCM for a new
@@ -67,8 +69,23 @@ export function windowRangeFor(
   };
 }
 
+/** Smallest analysis window we will use, however far in the view is zoomed.
+ *
+ * Tying the window to the hop alone is right in principle -- a wide view needs
+ * long windows -- but it bottomed out at 256 samples, which at 44.1kHz is
+ * 172Hz per band. A Thai male voice sits near 120Hz and a female near 220Hz,
+ * so at deep zoom the entire vocal fundamental collapsed into one or two fat
+ * bands and the harmonics disappeared: the picture went soft exactly where
+ * the editors were working (reported 2026-08-23, after Ctrl+K auditioning and
+ * fine zoom made deep zoom the normal place to be).
+ *
+ * 1024 gives 43Hz per band there instead, and costs about 5x the arithmetic
+ * on a frame that was already only a few milliseconds.
+ */
+export const MIN_FFT_SIZE = 1024;
+
 export function chooseFftSize(hopSamples: number): number {
-  let size = 256;
+  let size = MIN_FFT_SIZE;
   while (size < hopSamples * 2 && size < 4096) size <<= 1;
   return size;
 }
@@ -145,6 +162,8 @@ export class SpectrogramView {
   /** True while `base` shows a window that no longer matches the viewport —
    * drawn dimmed rather than thrown away, to avoid a black flash on seeks. */
   private baseIsStale = false;
+  /** Offscreen scratch for drawDimmed; kept so it is not reallocated per frame. */
+  private dimCanvas: HTMLCanvasElement | null = null;
   private dragPreview: { start: number; end: number } | null = null;
   private downX = -1;
 
@@ -223,9 +242,7 @@ export class SpectrogramView {
         // dim, so nobody places a cut against a frame from somewhere else
         ctx.fillStyle = "#101014";
         ctx.fillRect(0, 0, width, height);
-        ctx.globalAlpha = 0.35;
-        ctx.putImageData(this.base, 0, 0);
-        ctx.globalAlpha = 1;
+        this.drawDimmed(ctx, this.base, width, height);
         this.drawHint(ctx, width, height);
       } else {
         ctx.putImageData(this.base, 0, 0);
@@ -236,6 +253,38 @@ export class SpectrogramView {
       this.drawHint(ctx, width, height);
     }
     this.drawOverlays(ctx, width, height);
+  }
+
+  /** Paint an ImageData at reduced opacity.
+   *
+   * putImageData IGNORES globalAlpha -- it writes pixels straight into the
+   * bitmap, bypassing compositing entirely. So the obvious spelling of this
+   * (set globalAlpha, then putImageData) silently drew the stale frame at
+   * FULL brightness, and the safeguard that was supposed to stop an editor
+   * cutting against a frame from somewhere else in the file never worked at
+   * all. Going through drawImage puts it back in the compositing path.
+   */
+  private drawDimmed(
+    ctx: CanvasRenderingContext2D,
+    image: ImageData,
+    width: number,
+    height: number,
+  ): void {
+    let scratch = this.dimCanvas;
+    if (!scratch) {
+      scratch = document.createElement("canvas");
+      this.dimCanvas = scratch;
+    }
+    if (scratch.width !== width || scratch.height !== height) {
+      scratch.width = width;
+      scratch.height = height;
+    }
+    const scratchCtx = scratch.getContext("2d");
+    if (!scratchCtx) return;
+    scratchCtx.putImageData(image, 0, 0);
+    ctx.globalAlpha = STALE_FRAME_ALPHA;
+    ctx.drawImage(scratch, 0, 0);
+    ctx.globalAlpha = 1;
   }
 
   /** Long-file mode: the base image may be missing because the window is

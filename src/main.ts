@@ -3,6 +3,7 @@ import { readFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 import {
   audioFileUrl,
+  analyzeAudio,
   audioInfo,
   cancelJob,
   exportDocx,
@@ -25,6 +26,8 @@ import type {
   AudioInfo,
   ExportAudioResult,
   ExportFormat,
+  Loudness,
+  LoudnessComparison,
   TranscribeResult,
 } from "./api";
 import { AudioPlayer, WAVE_HEIGHT, cutToPreview, sliderToPxPerSec } from "./audio/player";
@@ -33,6 +36,7 @@ import type { SampleProvider } from "./audio/samples";
 import { WaveformDetail } from "./audio/wavedetail";
 import { clampCutBounds, fineStepVisibility, snapCutPoint } from "./audio/snap";
 import { SpectrogramView } from "./audio/spectrogram";
+import { installPanelSplitter } from "./panelsplit";
 import { Project } from "./project";
 import { buildSearchIndex, findMatches } from "./search";
 import type { SearchMatch } from "./search";
@@ -645,6 +649,9 @@ function setup(): void {
     // without the backend (they are pure project data).
     markerBtn.disabled = !hasProject || !player.isLoaded;
     exportBtn.disabled = !hasProject || !backendUp;
+    // Measuring reads the source through the EDL, so it is useful before any
+    // export exists — but it still needs the backend to decode the audio.
+    el<HTMLButtonElement>("#measure-btn").disabled = !hasProject || !backendUp;
     packBtn.disabled = !hasProject || !backendUp;
     saveBtn.disabled = !hasProject;
     saveAsBtn.disabled = !hasProject;
@@ -1400,6 +1407,161 @@ function setup(): void {
    * result in one line. This is the check the editors were running in a
    * separate analyser (team feedback 2026-08-20). Never throws: a failed
    * verification must not make a successful export look failed. */
+  const loudnessDialog = el<HTMLDialogElement>("#loudness-dialog");
+  const loudnessVerdict = el<HTMLElement>("#loudness-verdict");
+  const loudnessBody = el<HTMLElement>("#loudness-body");
+  let loudnessReportText = "";
+
+  const loudnessReasons = (cmp: LoudnessComparison): string[] => {
+    const reasons: string[] = [];
+    if (!cmp.sample_rate_match) reasons.push("sample rate ไม่ตรง");
+    if (!cmp.channels_match) reasons.push("จำนวนช่องไม่ตรง");
+    if (cmp.new_clipping) reasons.push("มีเสียงคลิป (เกินสเกล) ที่ต้นฉบับไม่มี");
+    if (Math.abs(cmp.lufs_delta_db) > cmp.lufs_tolerance_db)
+      reasons.push(`LUFS ต่างไป ${cmp.lufs_delta_db.toFixed(2)} dB`);
+    if (Math.abs(cmp.rms_delta_db) > cmp.rms_tolerance_db)
+      reasons.push(`RMS ต่างไป ${cmp.rms_delta_db.toFixed(2)} dB`);
+    if (Math.abs(cmp.peak_delta_db) > cmp.peak_tolerance_db)
+      reasons.push(`peak ต่างไป ${cmp.peak_delta_db.toFixed(2)} dB`);
+    return reasons;
+  };
+
+  /** One row per figure: source, export, and the difference that matters. */
+  const loudnessRows = (cmp: LoudnessComparison): string[][] => [
+    [
+      "LUFS (ITU-R BS.1770)",
+      cmp.source.lufs.toFixed(2),
+      cmp.edited.lufs.toFixed(2),
+      cmp.lufs_delta_db.toFixed(2),
+    ],
+    [
+      "True peak (dBTP)",
+      cmp.source.true_peak_dbtp.toFixed(2),
+      cmp.edited.true_peak_dbtp.toFixed(2),
+      cmp.true_peak_delta_db.toFixed(2),
+    ],
+    [
+      "RMS (dBFS)",
+      cmp.source.rms_dbfs.toFixed(2),
+      cmp.edited.rms_dbfs.toFixed(2),
+      cmp.rms_delta_db.toFixed(2),
+    ],
+    [
+      "Sample peak (dBFS)",
+      cmp.source.peak_dbfs.toFixed(2),
+      cmp.edited.peak_dbfs.toFixed(2),
+      cmp.peak_delta_db.toFixed(2),
+    ],
+  ];
+
+  /** Put the verdict on screen as a table rather than a line of status text.
+   *
+   * It used to be appended to the filename message after export, where the
+   * team never found it — they were still checking in RX instead, which is
+   * what surfaced the whole units question (2026-08-23). */
+  const showLoudnessReport = (cmp: LoudnessComparison): void => {
+    const rows = loudnessRows(cmp);
+    loudnessVerdict.textContent = cmp.unchanged
+      ? "✅ พลังเสียงไม่เปลี่ยน"
+      : "⚠️ พลังเสียงเปลี่ยน";
+    loudnessVerdict.className = `loudness-verdict ${cmp.unchanged ? "ok" : "warn"}`;
+
+    const head =
+      "<tr><th></th><th>ต้นฉบับ<br><small>(เฉพาะช่วงที่เก็บ)</small></th>" +
+      "<th>หลังตัด</th><th>ต่างกัน</th></tr>";
+    const body = rows
+      .map(
+        ([name, a, b, d]) =>
+          `<tr><th>${name}</th><td>${a}</td><td>${b}</td>` +
+          `<td class="${Math.abs(Number(d)) > 0.5 ? "warn" : ""}">${d}</td></tr>`,
+      )
+      .join("");
+    const notes: string[] = [];
+    if (!cmp.unchanged) notes.push(`<p class="warn">${loudnessReasons(cmp).join(" · ")}</p>`);
+    if (cmp.source_over_full_scale) {
+      notes.push(
+        `<p>ต้นฉบับพีคเกินเต็มสเกล (${cmp.source_peak_dbfs_raw.toFixed(2)} dBFS) ` +
+          "จึงถูกจำกัดที่ 0 dBFS ตามข้อจำกัดของ PCM — ไม่ใช่การบีบอัด</p>",
+      );
+    }
+    loudnessBody.innerHTML = `<table class="loudness-table">${head}${body}</table>${notes.join("")}`;
+
+    loudnessReportText = [
+      cmp.unchanged ? "พลังเสียงไม่เปลี่ยน" : "พลังเสียงเปลี่ยน",
+      "(ต้นฉบับวัดเฉพาะช่วงที่เก็บไว้ ไม่ใช่ทั้งไฟล์)",
+      ...rows.map(([n, a, b, d]) => `${n}\tต้นฉบับ ${a}\tหลังตัด ${b}\tต่าง ${d}`),
+    ].join("\n");
+
+    if (!loudnessDialog.open) loudnessDialog.showModal();
+  };
+
+  /** Pre-export measurement: what the edit WILL read, next to the whole file.
+   *
+   * Deliberately not phrased as a verdict. There is no export yet to verify,
+   * and the useful thing before one exists is seeing the two source figures
+   * side by side — because the gap between them is exactly the confusion that
+   * makes a whole-file RX comparison look like damage (asked 2026-08-23).
+   */
+  const showLoudnessPreview = (whole: Loudness, kept: Loudness, cutCount: number): void => {
+    loudnessVerdict.textContent = "📏 พลังเสียงของงานที่ตัดแล้ว";
+    loudnessVerdict.className = "loudness-verdict";
+    const rows: string[][] = [
+      ["LUFS (ITU-R BS.1770)", whole.lufs.toFixed(2), kept.lufs.toFixed(2)],
+      ["True peak (dBTP)", whole.true_peak_dbtp.toFixed(2), kept.true_peak_dbtp.toFixed(2)],
+      ["RMS (dBFS)", whole.rms_dbfs.toFixed(2), kept.rms_dbfs.toFixed(2)],
+      ["Sample peak (dBFS)", whole.peak_dbfs.toFixed(2), kept.peak_dbfs.toFixed(2)],
+      [
+        "ความยาว",
+        formatTime(whole.duration),
+        `${formatTime(kept.duration)} (ตัดออก ${cutCount} จุด)`,
+      ],
+    ];
+    const head =
+      "<tr><th></th><th>ต้นฉบับทั้งไฟล์</th><th>เฉพาะช่วงที่เก็บ<br>" +
+      "<small>(= ค่าที่จะได้หลัง export)</small></th></tr>";
+    const body = rows
+      .map(([n, a, b]) => `<tr><th>${n}</th><td>${a}</td><td>${b}</td></tr>`)
+      .join("");
+    loudnessBody.innerHTML =
+      `<table class="loudness-table">${head}${body}</table>` +
+      "<p>สองคอลัมน์นี้ต่างกันเพราะ<b>เนื้อหาถูกตัดออก</b> ไม่ใช่เพราะเสียงถูกแก้ — " +
+      "คอลัมน์ขวาคือค่าที่ไฟล์ export จะวัดได้</p>";
+    loudnessReportText = [
+      "พลังเสียงของงานที่ตัดแล้ว",
+      ...rows.map(([n, a, b]) => `${n}\tทั้งไฟล์ ${a}\tเฉพาะช่วงที่เก็บ ${b}`),
+    ].join("\n");
+    if (!loudnessDialog.open) loudnessDialog.showModal();
+  };
+
+  const measureBtn = el<HTMLButtonElement>("#measure-btn");
+  measureBtn.addEventListener("click", async () => {
+    if (!project) return;
+    const proj = project;
+    measureBtn.disabled = true;
+    const previous = fileName.textContent;
+    fileName.textContent = "กำลังวัดพลังเสียง… (ไฟล์ยาวใช้เวลาราวหนึ่งนาที)";
+    try {
+      const edl = proj.edl.map((c) => ({ start: c.start, end: c.end }));
+      // Sequential, not Promise.all: both passes decode the same file and the
+      // backend runs one job at a time anyway.
+      const whole = await analyzeAudio(proj.audioPath, []);
+      const kept = edl.length ? await analyzeAudio(proj.audioPath, edl) : whole;
+      showLoudnessPreview(whole, kept, edl.length);
+      fileName.textContent = previous;
+    } catch (err) {
+      fileName.textContent = `วัดพลังเสียงไม่สำเร็จ: ${String(err)}`;
+    } finally {
+      measureBtn.disabled = false;
+    }
+  });
+
+  el<HTMLButtonElement>("#loudness-close-btn").addEventListener("click", () =>
+    loudnessDialog.close(),
+  );
+  el<HTMLButtonElement>("#loudness-copy-btn").addEventListener("click", () => {
+    void navigator.clipboard.writeText(loudnessReportText);
+  });
+
   const verifyLoudness = async (proj: Project, outPath: string): Promise<string> => {
     try {
       const cmp = await compareAudio(
@@ -1407,9 +1569,10 @@ function setup(): void {
         outPath,
         proj.edl.map((c) => ({ start: c.start, end: c.end })),
       );
+      showLoudnessReport(cmp);
       const rms = cmp.rms_delta_db.toFixed(2);
       const peak = cmp.peak_delta_db.toFixed(2);
-      const detail = `RMS ${rms} dB, peak ${peak} dB`;
+      const detail = `LUFS ${cmp.lufs_delta_db.toFixed(2)} dB, RMS ${rms} dB, peak ${peak} dB`;
       if (cmp.unchanged) {
         // Say WHY the peak moved when the source was over full scale, or the
         // editor sees a lower peak in their analyser and doubts the verdict.
@@ -1419,13 +1582,7 @@ function setup(): void {
           : " — ไม่มีการบีบอัดหรือปรับความดัง";
         return `🔎 ตรวจแล้ว: พลังเสียงไม่เปลี่ยน (${detail})${note}`;
       }
-      const reasons: string[] = [];
-      if (!cmp.sample_rate_match) reasons.push("sample rate ไม่ตรง");
-      if (!cmp.channels_match) reasons.push("จำนวนช่องไม่ตรง");
-      if (cmp.new_clipping) reasons.push("มีเสียงคลิป (เกินสเกล) ที่ต้นฉบับไม่มี");
-      if (Math.abs(cmp.rms_delta_db) > cmp.rms_tolerance_db) reasons.push(`RMS ต่างไป ${rms} dB`);
-      if (Math.abs(cmp.peak_delta_db) > cmp.peak_tolerance_db) reasons.push(`peak ต่างไป ${peak} dB`);
-      return `⚠️ ตรวจแล้ว: พลังเสียงเปลี่ยน — ${reasons.join(", ")}`;
+      return `⚠️ ตรวจแล้ว: พลังเสียงเปลี่ยน — ${loudnessReasons(cmp).join(", ")}`;
     } catch (err) {
       return `(ตรวจพลังเสียงไม่สำเร็จ: ${String(err)} — ตัวไฟล์ export สำเร็จแล้ว)`;
     }
@@ -1492,6 +1649,18 @@ function setup(): void {
       fileName.textContent = `Export ไม่สำเร็จ: ${String(err)}`;
       refreshButtons();
     }
+  });
+
+  // Let the editor decide how much of the window the transcript gets; the
+  // waveform and spectrogram re-measure themselves afterwards, since both
+  // size their canvases from the space actually left over.
+  installPanelSplitter({
+    splitter: el<HTMLElement>("#transcript-splitter"),
+    panel: el<HTMLElement>("#transcript-panel"),
+    // Both canvases already redraw on a window resize, and wavesurfer watches
+    // its own container — so say "the layout changed" once and let each view
+    // do what it does for any other resize.
+    onResize: () => window.dispatchEvent(new Event("resize")),
   });
 
   // WebKit audio unlock: resume the AudioContext on every user gesture —

@@ -23,6 +23,7 @@
         <button id="save-as-btn" disabled title="บันทึกเป็นไฟล์ใหม่ โดยไม่ทับไฟล์เดิม">บันทึกเป็น</button>
         <button id="pack-btn" disabled title="รวมไฟล์เสียง + ไฟล์งาน ไว้ในโฟลเดอร์เดียว ย้ายเครื่อง/ส่งต่อได้ทั้งชุด เปิดได้เลยไม่ต้องแตกไฟล์">📦 รวมเป็นโปรเจกต์</button>
         <button id="export-btn" disabled title="Render เสียงตามการตัด (WAV + crossfade) และ .docx เนื้อหาที่แก้แล้ว — ต้นฉบับไม่ถูกแตะ">Export</button>
+        <button id="measure-btn" disabled title="วัดพลังเสียงของงานที่ตัดแล้วเทียบกับต้นฉบับ (LUFS / true peak / RMS) โดยไม่ต้อง export ก่อน">🔎 เทียบพลังเสียง</button>
         <button id="cancel-job-btn" class="cancel-btn" hidden title="หยุดงานที่กำลังทำ (ถอด/ตรึง/export)">ยกเลิกงาน ✕</button>
         <span class="cut-group">
           <button id="cut-btn" disabled title="ตัดช่วงคำที่เลือก (Delete) — บันทึกลง EDL ไม่แตะไฟล์ต้นฉบับ">✂ ตัดช่วงที่เลือก</button>
@@ -95,7 +96,17 @@
         <span id="fine-hint" class="fine-hint" hidden></span>
       </div>
 
-      <section class="transcript-panel">
+      <div
+        id="transcript-splitter"
+        class="panel-splitter"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="ลากเพื่อปรับขนาดช่อง transcript (ดับเบิลคลิกเพื่อคืนค่าเดิม)"
+        tabindex="0"
+        title="ลากขึ้น-ลงเพื่อปรับขนาด · ดับเบิลคลิกเพื่อคืนค่าเดิม"
+      ></div>
+
+      <section id="transcript-panel" class="transcript-panel">
         <div class="transcript-header">
           <span>Transcript ฉบับร่าง</span>
           <span id="review-count" class="review-count" title="กด Tab เพื่อไล่ตรวจคำที่ระบบไม่มั่นใจทีละคำ"></span>
@@ -155,6 +166,13 @@
           <tr><td>ลากบนคลื่น</td><td>เลือกช่วง (แถบฟ้า)</td></tr>
         </table>
 
+        <h4>ปรับขนาดช่องบท</h4>
+        <table class="help-table">
+          <tr><td>ลากแถบคั่น</td><td>ขยาย / ย่อช่องบท (จำขนาดไว้ให้)</td></tr>
+          <tr><td>ดับเบิลคลิกแถบคั่น</td><td>คืนขนาดเดิม</td></tr>
+          <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> ที่แถบคั่น</td><td>ปรับทีละนิด (<kbd>Shift</kbd> = ทีละมาก)</td></tr>
+        </table>
+
         <h4>ไฟล์</h4>
         <table class="help-table">
           <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>บันทึกโปรเจกต์</td></tr>
@@ -175,8 +193,34 @@
         </div>
         <label class="export-verify">
           <input id="export-verify-check" type="checkbox" checked />
-          ตรวจพลังเสียงหลัง export (เทียบ RMS/peak กับต้นฉบับ)
+          ตรวจพลังเสียงหลัง export (เทียบ LUFS/RMS/peak กับต้นฉบับ)
         </label>
+      </dialog>
+
+      <dialog id="loudness-dialog" class="loudness-dialog">
+        <h2 id="loudness-verdict" class="loudness-verdict"></h2>
+        <div id="loudness-body"></div>
+        <details class="loudness-help">
+          <summary>ถ้าจะตรวจซ้ำใน iZotope RX หรือ SpectraLayers</summary>
+          <p>
+            ตัวเลข <b>LUFS</b> และ <b>true peak</b> ข้างบนใช้มาตรฐานเดียวกับที่
+            RX และ SpectraLayers ใช้ (ITU-R BS.1770-4) เอาไปวางเทียบกันได้ตรงๆ
+          </p>
+          <p class="loudness-warn">
+            ⚠️ <b>อย่าเทียบทั้งไฟล์</b> — ค่าฝั่ง “ต้นฉบับ” ข้างบนวัดเฉพาะ<b>ช่วงที่เก็บไว้</b>
+            ไม่ใช่ทั้งไฟล์ ถ้าเปิดไฟล์ต้นฉบับใน RX แล้วอ่านค่าทั้งไฟล์มาลบกับไฟล์ที่ตัดแล้ว
+            ตัวเลขจะไม่ตรงกัน <b>เพราะเนื้อหาถูกตัดออกไป ไม่ใช่เพราะเสียงถูกบีบอัด</b>
+          </p>
+          <p>
+            วิธีที่ให้ผลถูกต้อง: เลือก<b>ช่วงที่ไม่ได้ถูกตัด</b>ในทั้งสองไฟล์
+            แล้วเทียบเฉพาะช่วงนั้น ค่าจะต้องตรงกัน เพราะเสียงที่เก็บไว้ถูกคัดลอกมาตรงๆ
+            ไม่ผ่านการประมวลผลใดๆ
+          </p>
+        </details>
+        <div class="loudness-buttons">
+          <button id="loudness-copy-btn">📋 คัดลอกผล</button>
+          <button id="loudness-close-btn" value="close">ปิด</button>
+        </div>
       </dialog>
 
       <footer class="statusbar">
