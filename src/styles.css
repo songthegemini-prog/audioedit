@@ -148,16 +148,38 @@ body {
   text-overflow: ellipsis;
 }
 
+/* This strip takes every pixel the toolbar and transcript do not, but both of
+ * its children used to be a FIXED height (waveform 120, spectrogram 190). On
+ * anything taller than about 800px the leftover — 244px on a 1080 window —
+ * simply sat there as dead grey space below the spectrogram, which reads as a
+ * stray margin (reported 2026-08-23). It was always there; the draggable
+ * transcript panel made it easy to hit, because shrinking the panel hands its
+ * space straight to this strip.
+ *
+ * The spectrogram absorbs the slack instead, and a taller spectrogram is
+ * genuinely more useful: the frequency axis is logarithmic, so extra rows go
+ * mostly to the low end where the cut points are. */
 .waves-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* wavesurfer sizes its own canvas (WAVE_HEIGHT); it must not be stretched. */
+.waves-scroll > #waves {
+  flex: 0 0 auto;
 }
 
 .spectrogram {
   display: block;
   width: 100%;
-  height: 190px;
+  /* min-height, not height: it may grow into the slack, but never shrink
+     below the size the frequency detail needs — past that the strip scrolls
+     (Alt+wheel), which is what overflow-y is for. */
+  min-height: 190px;
+  flex: 1 1 auto;
   background-color: #101014;
 }
 
