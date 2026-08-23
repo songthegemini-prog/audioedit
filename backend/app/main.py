@@ -12,7 +12,7 @@ from .asr import FasterWhisperEngine
 from .jobs import JobStore
 from .tokens import segment_words
 
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 
 # Only the Tauri webview may talk to this backend — it must never be
 # reachable from anywhere outside the local app.
