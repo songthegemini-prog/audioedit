@@ -65,19 +65,13 @@ export function installPanelSplitter({
   panel,
   onResize,
 }: SplitterHandles): void {
-  /** `notify` is false when the caller is ALREADY inside a resize event.
-   *
-   * onResize is expected to announce a layout change, and the natural way to
-   * do that is to dispatch a window resize — which lands right back here. The
-   * flag is what stops that becoming an infinite loop.
-   */
-  const apply = (px: number | null, notify = true): void => {
+  const apply = (px: number | null): void => {
     if (px === null) {
       panel.style.removeProperty("height"); // back to the stylesheet's 30%
     } else {
       panel.style.height = `${clampPanelHeight(px, window.innerHeight)}px`;
     }
-    if (notify) onResize?.();
+    onResize?.();
   };
 
   apply(loadStoredHeight());
@@ -134,9 +128,35 @@ export function installPanelSplitter({
     }
   });
 
-  // A stored height can be impossible after the window is made smaller.
+  // A previously-fine height can become too tall after the window shrinks, so
+  // re-clamp it on every resize.
+  //
+  // THE BUG (reported 2026-08-24, "ตัวขยายพาเนลพอเริ่มทำงานแล้วขยายไม่ได้" —
+  // the splitter stops responding once it has worked once): onResize() above
+  // re-broadcasts a window "resize" event so the waveform/spectrogram can
+  // re-measure after WE change the panel's height — and that broadcast lands
+  // right back on THIS listener, synchronously, before move()/the keydown
+  // handler even returns. The previous version reacted by reloading the
+  // STORED height and reapplying it — but storeHeight() only runs in end()
+  // and the keydown handler, both of which fire AFTER apply(), so mid-drag
+  // (and on every arrow-key press) it read the height from the drag/press
+  // BEFORE this one and stomped the live update back to it. The very first
+  // resize ever made was invisible (nothing was stored yet to revert to);
+  // every one after that appeared to do nothing.
+  //
+  // Re-clamping whatever height is ALREADY on the element — instead of
+  // consulting storage — sidesteps the stale-value problem entirely: by the
+  // time this fires, apply() has already written the live value, so reading
+  // it back and re-clamping is a no-op for our own broadcast, and still does
+  // its job for a genuine window resize.
   window.addEventListener("resize", () => {
-    const stored = loadStoredHeight();
-    if (stored !== null) apply(stored, false);
+    if (dragging) return; // the live drag drives its own updates
+    const inline = panel.style.height;
+    if (!inline) return; // still on the CSS default (30%) — nothing to clamp
+    const current = parseFloat(inline);
+    const clamped = clampPanelHeight(current, window.innerHeight);
+    if (Math.abs(clamped - current) > 0.5) {
+      panel.style.height = `${clamped}px`;
+    }
   });
 }
