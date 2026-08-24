@@ -24,20 +24,21 @@ jobs:
             torch_index: https://download.pytorch.org/whl/cpu
             suffix: ""
             bundles: nsis
-          # Same app, built against CUDA torch so forced alignment runs on the
-          # GPU. That step is 100% wav2vec2 forward pass and measured 59.8x
-          # faster there — 29 minutes down to about one for a 50-minute file —
-          # with word boundaries identical to the CPU build (0.0ms across 225
-          # words), which matters because those boundaries are where cuts land.
-          # It is a separate installer rather than the default because CUDA
-          # torch is 4.2GB installed: machines without an NVIDIA card would
-          # download all of it and get nothing.
-          - os: windows-latest
-            artifact: audioedit-windows-gpu
-            bundle_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
-            torch_index: https://download.pytorch.org/whl/cu128
-            suffix: "-gpu"
-            bundles: nsis
+          # NOTE: a "-gpu" job used to sit here, building against CUDA torch so
+          # forced alignment runs on the GPU (measured 59.8x: 29 minutes down to
+          # about one for a 50-minute file, with word boundaries identical to
+          # the CPU build). The CODE for it is still in place and switches on by
+          # itself wherever a CUDA-enabled torch is installed — see
+          # CTCAligner._pick_device. What is missing is a way to SHIP it:
+          #   - CUDA torch is 4.2GB installed and compresses to only 69%
+          #     (compiled binaries), so the payload is ~3.05GB
+          #   - NSIS caps an installer at 2GB: makensis died with
+          #     "error mmapping file (2096782148, ...) is out of range"
+          #   - WiX/MSI could not package it either: light.exe ran nine
+          #     minutes and failed
+          #   - a GitHub Release asset is also capped at 2GB
+          # So it needs a split archive or a thumbdrive hand-off, which is a
+          # distribution decision rather than a build one (2026-08-24).
           - os: macos-latest
             artifact: audioedit-macos
             bundle_glob: src-tauri/target/release/bundle/dmg/*.dmg
@@ -109,19 +110,7 @@ jobs:
           body: |
             ## ดาวน์โหลดตัวติดตั้ง
 
-            | ไฟล์ | ใช้กับ |
-            |---|---|
-            | `..._x64-setup.exe` | **Windows ทั่วไป** — เลือกตัวนี้ถ้าไม่แน่ใจ |
-            | `..._x64-gpu-setup.exe` | Windows ที่มีการ์ดจอ NVIDIA |
-            | `....dmg` | Mac |
-
-            **ตัว `-gpu` ต่างกันแค่เรื่องความเร็ว** — ขั้นตอน "ตรึงบท"
-            ใช้การ์ดจอแทน CPU จากราว 29 นาทีเหลือราว 1 นาที
-            (ไฟล์เสียง 50 นาที) ผลลัพธ์เหมือนกันทุกประการ ตำแหน่งคำไม่ขยับ
-            แม้แต่มิลลิวินาทีเดียว
-
-            ไฟล์ใหญ่กว่ามากเพราะต้องฝังไลบรารีการ์ดจอไปด้วย
-            **เครื่องที่ไม่มีการ์ดจอ NVIDIA ให้ใช้ตัวธรรมดา** ลงตัว `-gpu`
-            ไปก็ไม่ได้เร็วขึ้น
+            - **Windows**: ไฟล์ `.exe`
+            - **Mac**: ไฟล์ `.dmg`
 
             วิธีติดตั้งแบบละเอียด (ภาษาชาวบ้าน): ดู [ติดตั้ง.md](https://github.com/songthegemini-prog/audioedit/blob/main/%E0%B8%95%E0%B8%B4%E0%B8%94%E0%B8%95%E0%B8%B1%E0%B9%89%E0%B8%87.md)
