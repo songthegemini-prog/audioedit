@@ -135,9 +135,20 @@ function setup(): void {
   let matches: SearchMatch[] = [];
   let matchIndex = 0;
 
+  /** Exactly the words on screen right now.
+   *
+   * Must mirror the `.transcript.hide-excluded` rule in styles.css: searching
+   * text the editor cannot see is what made the search and the transcript
+   * disagree (FIXES.md #56). If that CSS rule changes, this changes with it.
+   */
+  const isSearchable = (i: number): boolean => {
+    if (!hideExcluded || !project) return true;
+    return !project.isExcluded(i) && !project.isTokenCut(i);
+  };
+
   const runSearch = (seekToCurrent: boolean) => {
     if (!project) return;
-    matches = findMatches(buildSearchIndex(project), searchInput.value);
+    matches = findMatches(buildSearchIndex(project, isSearchable), searchInput.value);
     if (matchIndex >= matches.length) matchIndex = 0;
     searchCount.textContent = matches.length
       ? `${matchIndex + 1}/${matches.length}`
@@ -222,6 +233,7 @@ function setup(): void {
       project.toggleExclude(i);
       transcript.refresh(i);
       updateDirty();
+      runSearch(false); // the word may have just left (or rejoined) the view
     },
     onEditStart: () => player.pause(),
     // Text-editor model: selecting pauses audio, moves the playhead to the
@@ -336,6 +348,9 @@ function setup(): void {
       : "";
     syncOverlays();
     updateDirty();
+    // Cutting strikes words out, and while "ซ่อนคำที่ไม่ใช้" is on it removes
+    // them from view entirely — either way the searchable text just changed.
+    runSearch(false);
   };
 
   /** Snap a boundary to silence/zero-crossing. Sync path for in-memory
@@ -1033,6 +1048,9 @@ function setup(): void {
     transcriptEl.classList.toggle("hide-excluded", hideExcluded);
     toggleExcludedBtn.classList.toggle("active", hideExcluded);
     toggleExcludedBtn.textContent = hideExcluded ? "โชว์คำที่ไม่ใช้" : "ซ่อนคำที่ไม่ใช้";
+    // The visible text just changed, so the search index is now stale — a
+    // stale one is exactly the disagreement this toggle used to cause.
+    runSearch(false);
   });
 
   hideFillersBtn.addEventListener("click", () => {
@@ -1040,6 +1058,7 @@ function setup(): void {
     const changed = project.excludeAllFillers();
     transcript.refreshAll();
     updateDirty();
+    runSearch(false); // struck-out fillers leave the view when hiding is on
     // Silent no-op looked broken when the file simply had no fillers —
     // always tell the user what happened (reported 2026-07-11)
     fileName.textContent = changed

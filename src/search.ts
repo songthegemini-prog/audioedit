@@ -16,12 +16,32 @@ export interface SearchMatch {
   endToken: number; // inclusive
 }
 
-export function buildSearchIndex(project: Project): SearchIndex {
+/** Build the searchable text.
+ *
+ * `isSearchable` decides which tokens contribute characters. It exists because
+ * "ซ่อนคำที่ไม่ใช้" hides cut and excluded words with CSS while the index kept
+ * counting them — so the search was reading text the editor could not see.
+ * Searching a phrase that looked contiguous on screen found nothing (a hidden
+ * cut word sat between its halves), the counter reported matches with nothing
+ * visible to show for them, and jumping to a match seeked to audio that had
+ * already been cut out (reported 2026-08-24: "ตัวค้นหากับตัวอักษรไม่ตรงกัน").
+ *
+ * Skipped tokens still get an entry in `tokenStartOffsets`, so token indices
+ * keep their meaning. A skipped token shares the offset of the next token
+ * that does contribute, and tokenAtOffset resolves such a tie to the LAST
+ * one — which is the visible token the character actually belongs to.
+ */
+export function buildSearchIndex(
+  project: Project,
+  isSearchable?: (index: number) => boolean,
+): SearchIndex {
   let text = "";
   const tokenStartOffsets: number[] = [];
   for (let i = 0; i < project.transcription.tokens.length; i++) {
     tokenStartOffsets.push(text.length);
-    text += project.effectiveText(i);
+    if (!isSearchable || isSearchable(i)) {
+      text += project.effectiveText(i);
+    }
   }
   return { text, tokenStartOffsets };
 }
