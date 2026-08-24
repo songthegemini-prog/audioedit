@@ -23,6 +23,7 @@ jobs:
             bundle_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
             torch_index: https://download.pytorch.org/whl/cpu
             suffix: ""
+            bundles: nsis
           # Same app, built against CUDA torch so forced alignment runs on the
           # GPU. That step is 100% wav2vec2 forward pass and measured 59.8x
           # faster there — 29 minutes down to about one for a 50-minute file —
@@ -36,11 +37,13 @@ jobs:
             bundle_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
             torch_index: https://download.pytorch.org/whl/cu128
             suffix: "-gpu"
+            bundles: nsis
           - os: macos-latest
             artifact: audioedit-macos
             bundle_glob: src-tauri/target/release/bundle/dmg/*.dmg
             torch_index: https://download.pytorch.org/whl/cpu
             suffix: ""
+            bundles: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -70,8 +73,12 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Only the formats actually shipped. tauri.conf.json says "all", which
+      # also builds an .msi nobody downloads — and WiX cannot package the GPU
+      # bundle at all: `light.exe` ran for nine minutes and failed, taking the
+      # whole job with it before NSIS was even reached (2026-08-24).
       - name: Build app (bundles the sidecar)
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
 
       # Both Windows jobs produce a file with the SAME name. They run on
       # separate runners so nothing clashes there, but they attach to one
