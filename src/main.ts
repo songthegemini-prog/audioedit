@@ -83,6 +83,8 @@ let project: Project | null = null;
 let loadGeneration = 0;
 let backendUp = false;
 let modelsReady = false;
+/** Only the alignment model — all "ตรึงบท" actually needs. */
+let alignModelReady = false;
 
 function setup(): void {
   const helpBtn = el<HTMLButtonElement>("#help-btn");
@@ -657,8 +659,13 @@ function setup(): void {
 
   const refreshButtons = () => {
     // ASR/alignment need the models; everything else works without them
-    transcribeBtn.disabled = !(currentPath && player.isLoaded && backendUp && modelsReady);
-    alignScriptBtn.disabled = transcribeBtn.disabled;
+    const audioReady = Boolean(currentPath) && player.isLoaded && backendUp;
+    transcribeBtn.disabled = !(audioReady && modelsReady);
+    // "ตรึงบท (มีบทแล้ว)" force-aligns a script the editor already has and
+    // never runs ASR, so it has no business demanding the 2.9GB ASR model —
+    // requiring it made a machine that only ever aligns download it for
+    // nothing (asked 2026-08-24).
+    alignScriptBtn.disabled = !(audioReady && alignModelReady);
     const hasProject = project !== null;
     // Markers only need a loaded file — they work before transcription, and
     // without the backend (they are pure project data).
@@ -1743,6 +1750,7 @@ function setup(): void {
   const checkModels = async () => {
     const status = await modelsStatus();
     modelsReady = status !== null && status.asr && status.align;
+    alignModelReady = status !== null && status.align;
     modelsBanner.hidden = modelsReady || status === null;
     // Say out loud that the models are installed, how big they are, and where
     // — uninstalling the app leaves them behind on purpose (so updates don't

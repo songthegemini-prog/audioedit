@@ -88,3 +88,19 @@ def test_compute_type_env_overrides_both(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("AUDIOEDIT_COMPUTE_TYPE", "float16")
     assert config.compute_type("cpu") == "float16"
     assert config.compute_type("cuda") == "float16"
+
+
+def test_align_device_asks_torch_by_default(monkeypatch) -> None:
+    """Unlike ASR this needs no add-on folder check: torch bundles its own
+    CUDA libraries, so a CUDA build has them or the package is the CPU one."""
+    monkeypatch.delenv("AUDIOEDIT_ALIGN_DEVICE", raising=False)
+
+    assert config.align_device() == "auto"
+
+
+def test_align_device_can_be_forced_to_cpu(monkeypatch) -> None:
+    """The escape hatch for a machine whose GPU is needed elsewhere, or where
+    a driver turns out to be unreliable mid-job."""
+    monkeypatch.setenv("AUDIOEDIT_ALIGN_DEVICE", "cpu")
+
+    assert config.align_device() == "cpu"

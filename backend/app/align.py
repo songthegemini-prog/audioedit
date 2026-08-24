@@ -58,6 +58,49 @@ class CTCAligner:
         self._model = None
         self._vocab: dict[str, int] | None = None
         self._blank_id = 0
+        # Which device the model ended up on — "cuda" only once it PROVED it
+        # can compute, never merely because torch reported a card.
+        self.device_in_use = "cpu"
+        self.gpu_error: str | None = None
+
+    def _pick_device(self, model) -> str:
+        """Move the model to the GPU, but only if it demonstrably works.
+
+        Alignment was the longest step of a job by far once ASR moved to the
+        GPU: measured 0.586s of CPU per second of audio, i.e. 29 minutes for a
+        50-minute file, and 100% of it is this model's forward pass
+        (forced_align itself costs 0.01s per segment). On the GPU the same
+        work measured 0.010s per second of audio — 59.8x — with word
+        boundaries IDENTICAL to the CPU result: 0.0ms of difference across 225
+        words, which is the number that matters because those boundaries are
+        where cuts land.
+
+        A build with CPU-only torch simply reports no CUDA and stays here.
+        The smoke test is for the other case, a CUDA build on a machine whose
+        driver or VRAM will not cooperate — the same lesson as the ASR side
+        (FIXES.md #33): a device that is *present* is not a device that works,
+        and failing here beats failing halfway through an hour-long job.
+        """
+        want = config.align_device()
+        if want == "cpu":
+            return "cpu"
+        import torch
+
+        try:
+            if not torch.cuda.is_available():
+                self.gpu_error = "torch reports no CUDA device"
+                return "cpu"
+            model.to("cuda")
+            with torch.inference_mode():  # 0.2s of silence: milliseconds
+                model(torch.zeros(1, SAMPLE_RATE // 5, device="cuda"))
+            return "cuda"
+        except Exception as err:  # any failure at all means: use the CPU
+            self.gpu_error = f"{type(err).__name__}: {err}"
+            try:
+                model.to("cpu")
+            except Exception:
+                pass
+            return "cpu"
 
     def _load(self) -> None:
         if self._model is not None:
@@ -72,7 +115,9 @@ class CTCAligner:
                 ".venv/bin/python scripts/fetch_model.py"
             )
         processor = Wav2Vec2Processor.from_pretrained(str(path))
-        self._model = Wav2Vec2ForCTC.from_pretrained(str(path)).eval()
+        model = Wav2Vec2ForCTC.from_pretrained(str(path)).eval()
+        self.device_in_use = self._pick_device(model)
+        self._model = model
         self._vocab = processor.tokenizer.get_vocab()
         self._blank_id = processor.tokenizer.pad_token_id
 
@@ -115,11 +160,16 @@ class CTCAligner:
             return [None] * len(words)
 
         with torch.inference_mode():
-            emission = self._model(waveform.unsqueeze(0)).logits.log_softmax(dim=-1)
+            emission = self._model(
+                waveform.unsqueeze(0).to(self.device_in_use)
+            ).logits.log_softmax(dim=-1)
 
         try:
+            # forced_align stays on the CPU deliberately: it is 0.01s of the
+            # ~14s a segment used to take, so moving it would buy nothing and
+            # would add a device the alignment maths has to agree about.
             aligned, scores = F.forced_align(
-                emission,
+                emission.cpu(),
                 torch.tensor([target_ids], dtype=torch.int32),
                 blank=self._blank_id,
             )

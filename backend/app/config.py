@@ -52,6 +52,17 @@ def cpu_threads() -> int:
     return int(os.environ.get("AUDIOEDIT_CPU_THREADS", "0"))
 
 
+def align_device() -> str:
+    """Which device forced alignment should run on.
+
+    Unlike ASR this needs no add-on folder to be checked: torch bundles its
+    own CUDA libraries, so a CUDA-enabled build either has them or the whole
+    package is the CPU one. "auto" therefore means "ask torch", and CTCAligner
+    still proves the device works before trusting it.
+    """
+    return os.environ.get("AUDIOEDIT_ALIGN_DEVICE", "auto")
+
+
 def align_model_dir() -> Path:
     return Path(os.environ.get("AUDIOEDIT_ALIGN_MODEL_DIR", str(DEFAULT_ALIGN_MODEL_DIR)))
 

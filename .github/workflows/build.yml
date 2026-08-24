@@ -21,9 +21,26 @@ jobs:
           - os: windows-latest
             artifact: audioedit-windows
             bundle_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
+            torch_index: https://download.pytorch.org/whl/cpu
+            suffix: ""
+          # Same app, built against CUDA torch so forced alignment runs on the
+          # GPU. That step is 100% wav2vec2 forward pass and measured 59.8x
+          # faster there — 29 minutes down to about one for a 50-minute file —
+          # with word boundaries identical to the CPU build (0.0ms across 225
+          # words), which matters because those boundaries are where cuts land.
+          # It is a separate installer rather than the default because CUDA
+          # torch is 4.2GB installed: machines without an NVIDIA card would
+          # download all of it and get nothing.
+          - os: windows-latest
+            artifact: audioedit-windows-gpu
+            bundle_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
+            torch_index: https://download.pytorch.org/whl/cu128
+            suffix: "-gpu"
           - os: macos-latest
             artifact: audioedit-macos
             bundle_glob: src-tauri/target/release/bundle/dmg/*.dmg
+            torch_index: https://download.pytorch.org/whl/cpu
+            suffix: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,12 +55,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # CPU-only torch keeps the bundle small (the CUDA build is ~2.5GB extra)
-      - name: Install backend deps (CPU torch)
+      - name: Install backend deps (torch from ${{ matrix.torch_index }})
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install torch torchaudio --index-url ${{ matrix.torch_index }}
           pip install -r requirements.txt
           pip install pyinstaller
 
@@ -56,6 +72,18 @@ jobs:
 
       - name: Build app (bundles the sidecar)
         run: npm run tauri build
+
+      # Both Windows jobs produce a file with the SAME name. They run on
+      # separate runners so nothing clashes there, but they attach to one
+      # Release — where the second upload would quietly replace the first.
+      - name: Set the GPU installer apart by name
+        if: matrix.suffix != ''
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for f in ${{ matrix.bundle_glob }}; do
+            mv "$f" "${f%-setup.exe}${{ matrix.suffix }}-setup.exe"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,7 +102,19 @@ jobs:
           body: |
             ## ดาวน์โหลดตัวติดตั้ง
 
-            - **Windows**: ไฟล์ `.exe`
-            - **Mac**: ไฟล์ `.dmg`
+            | ไฟล์ | ใช้กับ |
+            |---|---|
+            | `..._x64-setup.exe` | **Windows ทั่วไป** — เลือกตัวนี้ถ้าไม่แน่ใจ |
+            | `..._x64-gpu-setup.exe` | Windows ที่มีการ์ดจอ NVIDIA |
+            | `....dmg` | Mac |
+
+            **ตัว `-gpu` ต่างกันแค่เรื่องความเร็ว** — ขั้นตอน "ตรึงบท"
+            ใช้การ์ดจอแทน CPU จากราว 29 นาทีเหลือราว 1 นาที
+            (ไฟล์เสียง 50 นาที) ผลลัพธ์เหมือนกันทุกประการ ตำแหน่งคำไม่ขยับ
+            แม้แต่มิลลิวินาทีเดียว
+
+            ไฟล์ใหญ่กว่ามากเพราะต้องฝังไลบรารีการ์ดจอไปด้วย
+            **เครื่องที่ไม่มีการ์ดจอ NVIDIA ให้ใช้ตัวธรรมดา** ลงตัว `-gpu`
+            ไปก็ไม่ได้เร็วขึ้น
 
             วิธีติดตั้งแบบละเอียด (ภาษาชาวบ้าน): ดู [ติดตั้ง.md](https://github.com/songthegemini-prog/audioedit/blob/main/%E0%B8%95%E0%B8%B4%E0%B8%94%E0%B8%95%E0%B8%B1%E0%B9%89%E0%B8%87.md)
