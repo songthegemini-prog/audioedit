@@ -499,3 +499,42 @@ describe("taking back one specific cut", () => {
     expect(p.dirty).toBe(true);
   });
 });
+
+describe("tokensInSpan — which words a waveform drag lights up", () => {
+  /** Dragging a blue band on the waveform now highlights the words it covers,
+   * so this mapping decides what the editor sees before they cut (reported
+   * 2026-08-24: the band appeared but the transcript stayed blank). */
+  const project = () =>
+    new Project("/a.wav", {
+      text: "หนึ่งสองสามสี่",
+      segments: [{ text: "หนึ่งสองสามสี่", start: 0, end: 4 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สาม", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สี่", start: 3, end: 4, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+
+  it("covers the words inside the band", () => {
+    expect(project().tokensInSpan(0.9, 3.1)).toEqual([1, 2]);
+  });
+
+  it("counts a word whose MIDPOINT the band covers, not only whole words", () => {
+    // Same midpoint rule the cut itself uses, so the highlight cannot promise
+    // a different set of words than the cut will take.
+    expect(project().tokensInSpan(0.4, 1.6)).toEqual([0, 1]);
+  });
+
+  it("returns null for a band over no words at all", () => {
+    // A drag through silence past the end: the band is still valid to cut
+    // from, there is just nothing to light up.
+    expect(project().tokensInSpan(4.5, 5.0)).toBeNull();
+  });
+
+  it("covers everything when the band spans the file", () => {
+    expect(project().tokensInSpan(0, 4)).toEqual([0, 3]);
+  });
+})

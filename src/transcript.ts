@@ -227,8 +227,23 @@ export class TranscriptView {
     this.spans[i]?.scrollIntoView({ block: "nearest" });
   }
 
+  /** Light up the words a waveform drag covers, WITHOUT calling back.
+   *
+   * The blue band and the words have always been linked one way only: click a
+   * word and the band appears on the waveform. Dragging on the waveform left
+   * the transcript blank, so there was no way to see which words you were
+   * about to cut (reported 2026-08-24). This is the missing direction.
+   *
+   * It deliberately does not fire onSelectionChange. That callback re-derives
+   * the cut bounds from the tokens and snaps them, which would immediately
+   * overwrite the bounds the user just dragged by hand.
+   */
+  highlightRange(a: number | null, b: number | null): void {
+    this.setSelection(a, b, false);
+  }
+
   /** Selection state: pass (null, null) to clear. */
-  private setSelection(a: number | null, b: number | null): void {
+  private setSelection(a: number | null, b: number | null, notify = true): void {
     const prev = this.selection;
     this.selection =
       a === null || b === null ? null : [Math.min(a, b), Math.max(a, b)];
@@ -239,7 +254,7 @@ export class TranscriptView {
       for (let i = this.selection[0]; i <= this.selection[1]; i++) touch.add(i);
     }
     touch.forEach((i) => this.refresh(i));
-    this.callbacks.onSelectionChange(this.selection);
+    if (notify) this.callbacks.onSelectionChange(this.selection);
   }
 
   clearSelection(): void {

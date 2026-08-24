@@ -305,6 +305,25 @@ function setup(): void {
     refreshFineHint();
   };
 
+  /** Light up the words the blue band covers.
+   *
+   * Only for a band that came FROM the waveform: when the band came from a
+   * token selection the words are already lit, and re-deriving them from the
+   * (snapped) bounds could light up a different set than the one clicked.
+   *
+   * Display only — `selection` stays null, so cutting still treats this as a
+   * waveform drag, which is what allows it before alignment has run.
+   */
+  const highlightBandWords = (bounds: { start: number; end: number } | null) => {
+    if (!bounds) {
+      transcript.highlightRange(null, null);
+      return;
+    }
+    if (selection !== null || !project) return;
+    const span = project.tokensInSpan(bounds.start, bounds.end);
+    transcript.highlightRange(span ? span[0] : null, span ? span[1] : null);
+  };
+
   const setSelectionBounds = (bounds: { start: number; end: number } | null) => {
     selectionBounds = bounds;
     if (bounds) {
@@ -312,6 +331,7 @@ function setup(): void {
     } else {
       player.clearSelectionRegion();
     }
+    highlightBandWords(bounds);
     cutBtn.disabled = !bounds;
     playSelBtn.disabled = !bounds;
     // Ctrl+K auditions the selection when there is one, otherwise an existing
@@ -735,6 +755,9 @@ function setup(): void {
     },
     onSelectionRegionUpdated: (start, end) => {
       selectionBounds = { start, end };
+      // Dragging the band's edge does not go through setSelectionBounds, so
+      // the words have to be re-lit here or they lag behind the band.
+      highlightBandWords(selectionBounds);
       syncOverlays();
     },
     // Click on empty waveform = put the cursor there and drop the selection.
@@ -748,7 +771,11 @@ function setup(): void {
     },
     // Drag on empty waveform = select by sound, no transcript needed
     onWaveformSelection: (start, end) => {
-      transcript.clearSelection(); // drops any token-based selection first
+      // Clear FIRST, and not just for tidiness: it resets `selection` to null
+      // via onSelectionChange, which is the condition highlightBandWords needs
+      // before it will light up the dragged span. Without it a drag made after
+      // clicking a word left the OLD words lit.
+      transcript.clearSelection();
       player.pause();
       setSelectionBounds({ start, end });
     },
