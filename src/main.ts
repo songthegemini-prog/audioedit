@@ -40,7 +40,7 @@ import { installPanelSplitter } from "./panelsplit";
 import { Project } from "./project";
 import { buildSearchIndex, findMatches } from "./search";
 import type { SearchMatch } from "./search";
-import { TranscriptView } from "./transcript";
+import { releaseOutsideTextFocus, TranscriptView } from "./transcript";
 import { formatTime } from "./utils/time";
 
 const HEALTH_POLL_MS = 5000;
@@ -1206,6 +1206,15 @@ function setup(): void {
   // Ctrl/Cmd+wheel still zooms so the Mac pinch keeps working.
   // Shift+wheel (and a horizontal wheel/trackpad swipe) pans instead.
   const wavesScroll = el<HTMLElement>(".waves-scroll");
+  // Clicking the waveform means "I am working on the audio now" — so a text
+  // box that still holds focus (typically a marker note, which grabs it
+  // automatically) has to let go, or every later Ctrl+Z is swallowed by it.
+  // Capture phase: wavesurfer stops some of these on the way up.
+  wavesScroll.addEventListener(
+    "pointerdown",
+    () => releaseOutsideTextFocus(transcriptEl),
+    true,
+  );
   wavesScroll.addEventListener(
     "wheel",
     (e) => {

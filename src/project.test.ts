@@ -214,8 +214,61 @@ describe("Project.replaceSegment (index remapping)", () => {
     expect(p.edl[0].tokenRange).toBeNull(); // overlapped -> null, cut kept
     expect(p.edl[0].start).toBe(0.2); // times untouched
     expect(p.edl[1].tokenRange).toEqual([4, 4]); // shifted by +1
-    expect(p.canUndo).toBe(false); // history cleared (stale indices)
     expect(p.dirty).toBe(true);
+  });
+
+  it("keeps the undo history usable across a re-align", () => {
+    // This used to clear undoStack outright, so cutting a few things and then
+    // fixing a wording with ✎ left the undo button dead with no explanation
+    // (reported 2026-08-24: "ปุ่มย้อนกลับก็กดไม่ได้").
+    const p = makeTwoSegments();
+    p.addCut({ start: 3.0, end: 3.9, tokenRange: [3, 3] }); // in segment 2
+    expect(p.canUndo).toBe(true);
+
+    p.replaceSegment(0, "หวัดดีจ้า", newTokens); // 2 tokens -> 3 (delta +1)
+
+    expect(p.canUndo).toBe(true); // history survived
+    expect(p.undo()).toBe(true);
+    expect(p.edl).toHaveLength(0); // and it really undid the cut
+    expect(p.canRedo).toBe(true);
+  });
+
+  it("remaps the snapshots too, so an undone cut still points at its own words", () => {
+    // The reason the history used to be discarded: its snapshots hold token
+    // indices that the splice invalidates. Remapping them is what makes
+    // keeping the history safe rather than merely convenient.
+    const p = makeTwoSegments();
+    p.addCut({ start: 3.0, end: 3.9, tokenRange: [3, 3] }); // "ร้อน"
+    p.addCut({ start: 2.0, end: 2.9, tokenRange: [2, 2] }); // "วันนี้"
+    p.replaceSegment(0, "หวัดดีจ้า", newTokens); // segment 1: 2 -> 3 tokens
+
+    // Live EDL: both cuts sat after the replaced segment, so both shift by +1.
+    expect(p.edl.map((c) => c.tokenRange)).toEqual([
+      [3, 3],
+      [4, 4],
+    ]);
+
+    // Undo removes the most recent cut ("วันนี้", now index 3) and the one
+    // left behind must still be the shifted "ร้อน" — not the stale index 3.
+    p.undo();
+    expect(p.edl).toHaveLength(1);
+    expect(p.edl[0].tokenRange).toEqual([4, 4]);
+    expect(p.effectiveText(4)).toBe("ร้อน"); // the word it claims to cut
+  });
+
+  it("a cut overlapping the replaced segment stays a time-only cut through undo", () => {
+    const p = makeTwoSegments();
+    p.addCut({ start: 3.0, end: 3.9, tokenRange: [3, 3] }); // segment 2, kept
+    p.addCut({ start: 0.2, end: 0.9, tokenRange: [0, 0] }); // segment 1, doomed
+    p.replaceSegment(0, "หวัดดีจ้า", newTokens);
+
+    // Undo drops the overlapping cut; the snapshot it restores must carry the
+    // SHIFTED index for the surviving one, or the .docx would omit the wrong
+    // word after an undo.
+    p.undo();
+    expect(p.edl).toHaveLength(1);
+    expect(p.edl[0].tokenRange).toEqual([4, 4]);
+    expect(p.edl[0].start).toBe(3.0); // times never move
   });
 });
 

@@ -3,6 +3,25 @@ import type { SearchMatch } from "./search";
 
 export const LOW_CONFIDENCE = 0.5;
 
+/** Hand focus back from a text box the user has visibly stopped typing in.
+ *
+ * Ctrl+Z deliberately belongs to the TEXT while a field has focus, so the
+ * global handler bails on INPUT/TEXTAREA (FIXES.md #45's neighbour). The
+ * trap: clicking a transcript word does NOT move focus, because a <span> is
+ * not focusable — so focus stays wherever it was. Dropping a marker
+ * auto-focuses its note box, and from that moment every Ctrl+Z in the app was
+ * swallowed by an input the user had stopped looking at, with no visible
+ * reason (reported 2026-08-24, alongside "the undo button is dead too").
+ *
+ * `keep` is the transcript container: its OWN editors (token/segment boxes)
+ * must not be blurred, because blurring them commits the edit.
+ */
+export function releaseOutsideTextFocus(keep: HTMLElement): void {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || keep.contains(active)) return;
+  if (active.tagName === "INPUT" || active.tagName === "TEXTAREA") active.blur();
+}
+
 export interface TranscriptCallbacks {
   onEditText: (index: number, text: string) => void;
   onToggleExclude: (index: number) => void;
@@ -67,7 +86,9 @@ export class TranscriptView {
     });
     this.container.addEventListener("mousedown", (e) => {
       const i = tokenAt(e);
-      if (i !== null && !this.editingActive()) this.dragFrom = i;
+      if (i === null) return;
+      releaseOutsideTextFocus(this.container);
+      if (!this.editingActive()) this.dragFrom = i;
     });
     // mouseover bubbles (mouseenter does not) — spans are flat text so the
     // target is always the span itself

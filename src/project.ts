@@ -228,7 +228,8 @@ export class Project {
    *   edits after it shift by the delta
    * - EDL tokenRanges overlapping the segment become null (cut TIMES stay
    *   valid — the cut itself is never lost), later ranges shift
-   * - the EDL undo history is cleared (its snapshots hold stale indices) */
+   * - the SAME remapping is applied to every undo/redo snapshot, so the
+   *   history survives (see below) */
   replaceSegment(segIndex: number, newText: string, newTokens: Token[]): void {
     const [first, endEx] = this.segmentTokenRange(segIndex);
     const delta = newTokens.length - (endEx - first);
@@ -248,17 +249,32 @@ export class Project {
     }
     this.edits = remapped;
 
-    this.edlList = this.edlList.map((cut) => {
-      if (!cut.tokenRange) return cut;
-      const [a, b] = cut.tokenRange;
-      if (b < first) return cut;
-      if (a >= endEx) {
-        return { ...cut, tokenRange: [a + delta, b + delta] as [number, number] };
-      }
-      return { ...cut, tokenRange: null };
-    });
-    this.undoStack = [];
-    this.redoStack = [];
+    const shiftCuts = (cuts: Cut[]): Cut[] =>
+      cuts.map((cut) => {
+        if (!cut.tokenRange) return cut;
+        const [a, b] = cut.tokenRange;
+        if (b < first) return cut;
+        if (a >= endEx) {
+          return { ...cut, tokenRange: [a + delta, b + delta] as [number, number] };
+        }
+        return { ...cut, tokenRange: null };
+      });
+
+    this.edlList = shiftCuts(this.edlList);
+    // The history used to be thrown away here, on the grounds that its
+    // snapshots hold token indices that this splice just invalidated. True —
+    // but the cure was worse: the editor cuts a few things, fixes a wording
+    // with ✎, and the undo button goes dead with no explanation. Reported
+    // 2026-08-24 as "ปุ่มย้อนกลับก็กดไม่ได้", which is exactly what it
+    // looks like from the outside.
+    //
+    // Remapping the snapshots the same way the live EDL is remapped keeps
+    // them consistent instead. Cut TIMES are never touched by a re-align, so
+    // an undone snapshot still describes the same audio; a range that
+    // overlapped the replaced segment becomes null there too, and null ranges
+    // already fall back to a time comparison (isTokenRemoved).
+    this.undoStack = this.undoStack.map(shiftCuts);
+    this.redoStack = this.redoStack.map(shiftCuts);
     this.dirty = true;
   }
 
