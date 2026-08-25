@@ -205,6 +205,9 @@ export interface RealignResponse {
   start: number;
   end: number;
   tokens: Token[];
+  /** False when the times were spread evenly instead of heard — the machine
+   * had no alignment model. The words are right, the timings are estimates. */
+  aligned: boolean;
 }
 
 /** Render the EDL into a NEW audio file (job). The source is never modified.

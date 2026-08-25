@@ -34,6 +34,17 @@ export interface TranscriptCallbacks {
   onSelectionChange: (selection: [number, number] | null) => void;
   /** แก้ทั้งวรรค committed — host re-aligns the text then re-renders. */
   onSegmentText: (segIndex: number, text: string) => void;
+  /** Why แก้ทั้งวรรค is unavailable right now, or null when it is fine.
+   *
+   * It needs the backend and the alignment model, because committing sends the
+   * retyped paragraph away to be re-timed. Nothing stopped the editor typing a
+   * whole paragraph first and only meeting the error on Enter — at which point
+   * the text was thrown away with it (asked 2026-08-24). Checked BEFORE the
+   * box opens instead.
+   */
+  segmentEditBlockedReason?: () => string | null;
+  /** Tell the user why, rather than having the pencil do nothing (FIXES #45). */
+  onSegmentEditBlocked?: (reason: string) => void;
 }
 
 /** Clickable, editable transcript bound to a Project.
@@ -191,6 +202,11 @@ export class TranscriptView {
 
   private startSegmentEdit(segIndex: number, block: HTMLElement): void {
     if (!this.project) return;
+    const blocked = this.callbacks.segmentEditBlockedReason?.();
+    if (blocked) {
+      this.callbacks.onSegmentEditBlocked?.(blocked);
+      return;
+    }
     this.finishOpenEditor(); // never silently ignore an edit request
     this.editing = true;
     this.editingIndex = -1; // segment box lives in the block, not a span

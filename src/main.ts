@@ -219,6 +219,11 @@ function setup(): void {
         afterEdlChange();
         updateReviewCount();
         runSearch(false);
+        if (!res.aligned) {
+          fileName.textContent =
+            "แก้วรรคแล้ว — แต่เครื่องนี้ไม่มีโมเดล เวลาของคำในวรรคนี้จึงเป็นค่าประมาณ " +
+            "(ขีดแดงไว้) ตัดจากคลื่นเสียงโดยตรงจะแม่นกว่าตัดจากการเลือกคำ";
+        }
       } catch (err) {
         if (project !== proj) return; // stale failure for a closed project
         transcript.render(project); // restore the old segment
@@ -265,6 +270,18 @@ function setup(): void {
       fileName.textContent = project.isKeptInDoc(i)
         ? `📝 เก็บคำ "${project.effectiveText(i)}" ไว้ในเอกสาร (เสียงยังถูกตัดอยู่)`
         : `คำ "${project.effectiveText(i)}" กลับไปหายตามเสียงที่ตัดแล้ว`;
+    },
+    // แก้ทั้งวรรค needs the backend — Thai word segmentation lives there — but
+    // NOT the models. The editors who retype paragraphs are precisely the ones
+    // without them: the machine that owns the models makes the transcript and
+    // hands the project on. Checked before the box opens, because failing on
+    // Enter threw away the whole paragraph they had just typed.
+    segmentEditBlockedReason: () =>
+      backendUp ? null : "ยังต่อกับ backend ไม่ได้ (ลองเปิดโปรแกรมใหม่)",
+    onSegmentEditBlocked: (reason) => {
+      fileName.textContent =
+        `แก้ทั้งวรรคยังใช้ไม่ได้: ${reason} — ` +
+        "แต่แก้ทีละคำได้ตามปกติ (ดับเบิลคลิกที่คำ)";
     },
     onEditStart: () => player.pause(),
     // Text-editor model: selecting pauses audio, moves the playhead to the

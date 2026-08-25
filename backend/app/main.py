@@ -289,18 +289,34 @@ def realign(req: RealignRequest, aligner: CTCAligner = Depends(get_aligner)) -> 
     if not words:
         raise HTTPException(status_code=400, detail="ข้อความว่างเปล่า")
 
+    # Never fail for want of the alignment model. The editors who retype a
+    # paragraph are the ones WITHOUT it: the machine that owns the models
+    # produces the transcript and hands the project on, and from there the
+    # editor must still be able to fix both the audio and the words (2026-08-24).
+    #
+    # What แก้ทั้งวรรค genuinely needs is Thai word segmentation, which is
+    # pythainlp and ships inside the sidecar on every machine. The model only
+    # refines the TIMES; without it the words are spread across the segment's
+    # own range and marked confidence 0, exactly as a line that refuses to
+    # align already is — flagged red for review, never silently wrong.
+    spans = None
+    aligned = False
     try:
-        spans = next(iter(aligner.align(path, [SegmentWords(req.start, req.end, words)])))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
-    if not any(s is not None for s in spans):
-        spans = None  # nothing aligned — fall back to proportional times
+        got = next(iter(aligner.align(path, [SegmentWords(req.start, req.end, words)])))
+        if any(s is not None for s in got):
+            spans = got
+            aligned = True
+    except Exception:
+        spans = None  # no model, or it failed — proportional times instead
     tokens = line_tokens(req.text, req.start, req.end, spans)
     return {
         "text": req.text,
         "start": tokens[0].start,
         "end": tokens[-1].end,
         "tokens": [t.to_dict() for t in tokens],
+        # False when the times are spread evenly rather than heard. The UI says
+        # so, because these words must not be cut from as if they were exact.
+        "aligned": aligned,
     }
 
 
