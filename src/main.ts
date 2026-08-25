@@ -21,6 +21,7 @@ import {
   startExportAudio,
   startPrepareAudio,
   startTranscribe,
+  updateDocx,
 } from "./api";
 import type {
   AudioInfo,
@@ -1792,6 +1793,43 @@ function setup(): void {
 
     const choice = await askExportChoice();
     if (choice === "cancel") return;
+
+    if (choice === "update") {
+      // Update the team's OWN document rather than writing a new one. Their
+      // cover sheet, superscript story markers and hand-placed spacing are
+      // the deliverable, and a fresh export throws all of it away.
+      try {
+        const docPath = await open({
+          multiple: false,
+          directory: false,
+          title: "เลือกไฟล์ Word ที่จะอัปเดต",
+          filters: [{ name: "Word", extensions: ["docx"] }],
+        });
+        if (typeof docPath !== "string") return;
+        const outPath = await save({
+          defaultPath: docPath,
+          title: "บันทึกทับไฟล์เดิม หรือบันทึกเป็นไฟล์ใหม่",
+          filters: [{ name: "Word", extensions: ["docx"] }],
+        });
+        if (!outPath) return;
+        fileName.textContent = "กำลังเทียบบทกับไฟล์ Word…";
+        const res = await updateDocx(docPath, outPath, [...proj.exportLines()]);
+        if (!res.matched) {
+          // Nothing recognisable in common. Rewriting on a guess would
+          // destroy a document that cannot be recovered, so nothing was.
+          fileName.textContent =
+            "บทไม่ตรงกับไฟล์ Word นี้ — ไม่ได้แก้อะไรเลย (ตรวจว่าเลือกไฟล์ถูกไหมคะ)";
+          return;
+        }
+        fileName.textContent =
+          `✅ อัปเดตไฟล์ Word แล้ว: ${res.out_path} — ` +
+          `แก้ไข ${res.edited} · เพิ่มเติม ${res.added} · ตัดออก ${res.removed} ` +
+          `(อีก ${res.untouched} ย่อหน้าไม่ถูกแตะ)`;
+      } catch (err) {
+        fileName.textContent = `อัปเดตไฟล์ Word ไม่สำเร็จ: ${String(err)}`;
+      }
+      return;
+    }
 
     if (choice === "doc") {
       // Doc-only: no audio render, no rough-timestamp warning (text content

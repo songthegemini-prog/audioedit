@@ -507,6 +507,33 @@ def export_docx(req: ExportDocxRequest) -> dict:
     return {"out_path": str(out_path), "paragraphs": len(req.lines)}
 
 
+class UpdateDocxRequest(BaseModel):
+    doc_path: str  # the formatted document to update
+    out_path: str  # where to save it (may be the same file)
+    lines: list[str]
+
+
+@app.post("/update_docx")
+def update_docx_endpoint(req: UpdateDocxRequest) -> dict:
+    """Put corrected text into an existing document, keeping its formatting.
+
+    Different from /export_docx, which builds a plain document from nothing.
+    This one edits the team's own file — cover sheet, superscript markers,
+    tabs and hand-placed spacing all stay exactly as they typed them, because
+    the runs holding them are never written to.
+    """
+    doc_path = Path(req.doc_path).expanduser()
+    out_path = Path(req.out_path).expanduser()
+    if not doc_path.is_file():
+        raise HTTPException(status_code=400, detail=f"no such file: {doc_path}")
+    if not out_path.parent.is_dir():
+        raise HTTPException(status_code=400, detail=f"no such folder: {out_path.parent}")
+
+    from .docx_update import update_docx
+
+    return update_docx(doc_path, out_path, req.lines)
+
+
 @app.delete("/jobs/{job_id}")
 def cancel_job(job_id: str, store: JobStore = Depends(get_job_store)) -> dict:
     if store.get(job_id) is None:

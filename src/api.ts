@@ -303,6 +303,46 @@ export async function exportDocx(outPath: string, lines: string[]): Promise<void
   }
 }
 
+export interface DocxChange {
+  kind: string; // แก้ไข | เพิ่มเติม | ตัดออก
+  paragraph: number;
+  before: string;
+  after: string;
+}
+
+export interface UpdateDocxResult {
+  out_path: string;
+  edited: number;
+  added: number;
+  removed: number;
+  untouched: number;
+  /** False when the script did not match the document — nothing was changed. */
+  matched: boolean;
+  changes: DocxChange[];
+}
+
+/** Put corrected text into an existing formatted document.
+ *
+ * Not the same as exportDocx, which writes a plain new file. This keeps the
+ * team's own document — cover sheet, superscript markers, spacing — and
+ * changes only the paragraphs whose words actually differ. */
+export async function updateDocx(
+  docPath: string,
+  outPath: string,
+  lines: string[],
+): Promise<UpdateDocxResult> {
+  const res = await fetch(`${apiBase()}/update_docx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ doc_path: docPath, out_path: outPath, lines }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return (await res.json()) as UpdateDocxResult;
+}
+
 export async function cancelJob(jobId: string): Promise<void> {
   await fetch(`${apiBase()}/jobs/${jobId}`, { method: "DELETE" });
 }
