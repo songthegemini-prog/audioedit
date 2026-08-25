@@ -227,9 +227,13 @@ function setup(): void {
     const extra = (duration / oldLen) * grew * 1.3; // margin for a slower tail
     const limitEnd = segIndex + 1 < segs.length ? segs[segIndex + 1].start : player.duration;
     const limitStart = segIndex > 0 ? segs[segIndex - 1].end : 0;
+    // Never narrower than the segment itself: neighbours can overlap it (a
+    // realigned line may end past where the next one starts), and clamping to
+    // an overlapping neighbour would cut this segment's own words out of the
+    // window — worse than not widening at all.
     return {
-      start: Math.max(seg.start - extra * 0.2, limitStart),
-      end: Math.min(seg.end + extra, limitEnd),
+      start: Math.min(seg.start, Math.max(seg.start - extra * 0.2, limitStart)),
+      end: Math.max(seg.end, Math.min(seg.end + extra, limitEnd)),
     };
   };
 
