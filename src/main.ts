@@ -131,6 +131,12 @@ function setup(): void {
 
   const updateDirty = () => {
     dirtyDot.hidden = !(project?.dirty ?? false);
+    // Undo now covers text edits too, so the buttons have to follow every
+    // mutation — not just the ones that go through afterEdlChange. Leaving
+    // them grey while Ctrl+Z quietly works is how "ปุ่มย้อนกลับกดไม่ได้"
+    // looked from the outside the last time (FIXES.md #54).
+    undoBtn.disabled = !project?.canUndo;
+    redoBtn.disabled = !project?.canRedo;
   };
 
   // --- search state ---

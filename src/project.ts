@@ -56,6 +56,18 @@ export interface ProjectFileV2 {
   edl: Cut[];
 }
 
+/** One undo step.
+ *
+ * Both halves together, because they are one action to the person doing it:
+ * undo covered only the EDL, so a wording fix or a struck-out word could not
+ * be taken back at all (reported 2026-08-24: "ตัว text ถ้ามีการแก้ไข จะย้อน
+ * กลับไม่ได้ เพราะตัวย้อนกลับทำไว้แค่เสียงเท่านั้น").
+ */
+interface HistoryState {
+  edl: Cut[];
+  edits: Map<number, TokenEdit>;
+}
+
 /** A transcription plus the user's edits; serializable to <name>.audioedit.json. */
 export class Project {
   /** Mutable: when a project moves machines, the audio is re-located next to
@@ -69,8 +81,10 @@ export class Project {
   private markerList: Marker[] = [];
   private nextMarkerId = 1;
   private edlList: Cut[] = [];
-  private undoStack: Cut[][] = [];
-  private redoStack: Cut[][] = [];
+  private undoStack: HistoryState[] = [];
+  private redoStack: HistoryState[] = [];
+  /** Set while a bulk action runs, so it lands as ONE undo step. */
+  private batching = false;
 
   constructor(audioPath: string, transcription: TranscribeResult) {
     this.audioPath = audioPath;
@@ -135,8 +149,8 @@ export class Project {
   undo(): boolean {
     const prev = this.undoStack.pop();
     if (!prev) return false;
-    this.redoStack.push(this.edlList);
-    this.edlList = prev;
+    this.redoStack.push(this.snapshot());
+    this.restore(prev);
     this.dirty = true;
     return true;
   }
@@ -144,8 +158,8 @@ export class Project {
   redo(): boolean {
     const next = this.redoStack.pop();
     if (!next) return false;
-    this.undoStack.push(this.edlList);
-    this.edlList = next;
+    this.undoStack.push(this.snapshot());
+    this.restore(next);
     this.dirty = true;
     return true;
   }
@@ -165,8 +179,40 @@ export class Project {
   }
 
   private pushHistory(): void {
-    this.undoStack.push(this.edlList.map((c) => ({ ...c })));
+    if (this.batching) return; // a bulk action already pushed its one step
+    this.undoStack.push(this.snapshot());
     this.redoStack = [];
+  }
+
+  private snapshot(): HistoryState {
+    return {
+      edl: this.edlList.map((c) => ({ ...c })),
+      edits: new Map([...this.edits].map(([i, e]) => [i, { ...e }])),
+    };
+  }
+
+  private restore(state: HistoryState): void {
+    this.edlList = state.edl;
+    this.edits = state.edits;
+  }
+
+  /** Run a bulk change as ONE undo step.
+   *
+   * Without this, "ซ่อน filler" on an hour-long file pushes one step per word
+   * and undoing it means hundreds of presses.
+   */
+  private asOneStep(run: () => void): void {
+    if (this.batching) {
+      run();
+      return;
+    }
+    this.pushHistory();
+    this.batching = true;
+    try {
+      run();
+    } finally {
+      this.batching = false;
+    }
   }
 
   /** Text to display/export for token i: the human's fix, else ASR text. */
@@ -195,6 +241,7 @@ export class Project {
    * word and holding both would make the export depend on check order.
    */
   toggleKeepInDoc(i: number): void {
+    this.pushHistory();
     const edit = { ...this.edits.get(i) };
     if (edit.keepInDoc) {
       delete edit.keepInDoc;
@@ -207,6 +254,7 @@ export class Project {
 
   /** Set the corrected spelling. Empty text or the original text clears the fix. */
   setEditedText(i: number, text: string): void {
+    this.pushHistory();
     const edit = { ...this.edits.get(i) };
     const trimmed = text.trim();
     if (trimmed === "" || trimmed === this.transcription.tokens[i].text) {
@@ -219,6 +267,7 @@ export class Project {
 
   /** Flip "not content": token leaves the exported doc, audio stays untouched. */
   toggleExclude(i: number): void {
+    this.pushHistory();
     const edit = { ...this.edits.get(i) };
     if (edit.excludeFromDoc) {
       delete edit.excludeFromDoc;
@@ -306,8 +355,18 @@ export class Project {
     // an undone snapshot still describes the same audio; a range that
     // overlapped the replaced segment becomes null there too, and null ranges
     // already fall back to a time comparison (isTokenRemoved).
-    this.undoStack = this.undoStack.map(shiftCuts);
-    this.redoStack = this.redoStack.map(shiftCuts);
+    // The edit indices in a snapshot shift exactly the way the live ones did.
+    const shiftState = (state: HistoryState): HistoryState => {
+      const moved = new Map<number, TokenEdit>();
+      for (const [i, edit] of state.edits) {
+        if (i < first) moved.set(i, edit);
+        else if (i >= endEx) moved.set(i + delta, edit);
+        // edits inside the replaced span are dropped, same as the live ones
+      }
+      return { edl: shiftCuts(state.edl), edits: moved };
+    };
+    this.undoStack = this.undoStack.map(shiftState);
+    this.redoStack = this.redoStack.map(shiftState);
     this.dirty = true;
   }
 
@@ -344,11 +403,13 @@ export class Project {
   /** Mark every filler token as not-content. Returns how many changed. */
   excludeAllFillers(): number {
     let changed = 0;
-    this.transcription.tokens.forEach((token, i) => {
-      if (token.isFiller && !this.isExcluded(i)) {
-        this.toggleExclude(i);
-        changed += 1;
-      }
+    this.asOneStep(() => {
+      this.transcription.tokens.forEach((token, i) => {
+        if (token.isFiller && !this.isExcluded(i)) {
+          this.toggleExclude(i);
+          changed += 1;
+        }
+      });
     });
     return changed;
   }

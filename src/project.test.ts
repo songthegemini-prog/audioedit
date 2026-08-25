@@ -678,3 +678,102 @@ describe("keep the words, drop the sound (asked 2026-08-24)", () => {
     expect(p.exportLines().join("")).toBe("หนึ่งสองสาม");
   });
 })
+
+describe("undo covers text edits, not only cuts (reported 2026-08-24)", () => {
+  /** "ตัว text ถ้ามีการแก้ไข จะย้อนกลับไม่ได้ เพราะตัวย้อนกลับทำไว้แค่เสียง
+   * เท่านั้น" — the history held EDL snapshots only, so a wording fix or a
+   * struck-out word could not be taken back at all. */
+  const project = () =>
+    new Project("/a.wav", {
+      text: "หนึ่งอ่าสองอืมสาม",
+      segments: [{ text: "หนึ่งอ่าสองอืมสาม", start: 0, end: 5 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "อ่า", start: 1, end: 2, isFiller: true, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "อืม", start: 3, end: 4, isFiller: true, docCharRange: null, confidence: 1 },
+        { text: "สาม", start: 4, end: 5, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+
+  it("takes back a corrected word", () => {
+    const p = project();
+    p.setEditedText(0, "หนึ่งหนึ่ง");
+    expect(p.canUndo).toBe(true);
+
+    p.undo();
+
+    expect(p.effectiveText(0)).toBe("หนึ่ง");
+  });
+
+  it("takes back striking a word out", () => {
+    const p = project();
+    p.toggleExclude(2);
+
+    p.undo();
+
+    expect(p.isExcluded(2)).toBe(false);
+  });
+
+  it("takes back 'keep the words, drop the sound'", () => {
+    const p = project();
+    p.addCut({ start: 1.9, end: 3.1, tokenRange: [2, 2] });
+    p.toggleKeepInDoc(2);
+
+    p.undo();
+
+    expect(p.isKeptInDoc(2)).toBe(false);
+    expect(p.isTokenCut(2)).toBe(true); // only the keep came back, not the cut
+  });
+
+  it("redo puts a text edit back", () => {
+    const p = project();
+    p.setEditedText(0, "หนึ่งหนึ่ง");
+    p.undo();
+
+    p.redo();
+
+    expect(p.effectiveText(0)).toBe("หนึ่งหนึ่ง");
+  });
+
+  it("undoes text and audio in the order they happened", () => {
+    // They share one history, so the editor gets back exactly the previous
+    // state rather than two separate timelines that disagree.
+    const p = project();
+    p.setEditedText(0, "แก้แล้ว");
+    p.addCut({ start: 4, end: 5, tokenRange: [4, 4] });
+
+    p.undo(); // the cut
+    expect(p.edl).toHaveLength(0);
+    expect(p.effectiveText(0)).toBe("แก้แล้ว"); // the edit survives
+
+    p.undo(); // the edit
+    expect(p.effectiveText(0)).toBe("หนึ่ง");
+  });
+
+  it("hiding every filler is ONE step, not one per word", () => {
+    // On an hour-long file the per-word version would need hundreds of
+    // presses to undo, which is the same as not being undoable.
+    const p = project();
+    const changed = p.excludeAllFillers();
+    expect(changed).toBe(2);
+
+    p.undo();
+
+    expect(p.isExcluded(1)).toBe(false);
+    expect(p.isExcluded(3)).toBe(false);
+    expect(p.canUndo).toBe(false); // nothing left — it really was one step
+  });
+
+  it("an edit made after an undo drops the redo branch", () => {
+    const p = project();
+    p.setEditedText(0, "ก");
+    p.undo();
+
+    p.setEditedText(2, "ข");
+
+    expect(p.canRedo).toBe(false);
+  });
+})
