@@ -16,7 +16,13 @@ from pathlib import Path
 from .align_spans import WordSpan
 from .tokens import Token, segment_to_tokens, segment_words
 
-CHARS_PER_SEC = 12.0  # rough Thai narration speed, only for window sizing
+# Fallback only. The real rate is measured per file — see chars_per_sec().
+CHARS_PER_SEC = 12.0
+# A measured rate outside this range means the script does not describe this
+# audio (a fragment pasted against a whole programme, or the wrong file), so
+# the guess is safer than the measurement.
+MIN_CHARS_PER_SEC = 4.0
+MAX_CHARS_PER_SEC = 20.0
 WINDOW_SLACK_SEC = 5.0
 MAX_WINDOW_SEC = 60.0  # bounds wav2vec2 memory per call
 # Lines are aligned in ~35s batches: forced alignment spreads the target over
@@ -38,18 +44,42 @@ def script_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def estimate_duration(line: str) -> float:
-    return len(line) / CHARS_PER_SEC
+def chars_per_sec(lines: list[str], total_sec: float) -> float:
+    """How fast this narrator actually reads, in characters per second.
+
+    Everything about the search windows is derived from this, and a wrong
+    value poisons the whole pass: the constant said 12.0 while the team's
+    narrator reads at 9.0, so every window came out a quarter too short, the
+    aligner had to squeeze each batch of words into too little audio, and the
+    error compounded down the file. Measured on their own programme, 3 of 108
+    lines aligned with any confidence and the cursor finished 84 seconds short
+    of the end (reported 2026-08-24: "ตรึงบทไม่ถูกเลย ... มีถูกเป็นบางบรรทัด").
+    Measuring the rate instead: 89 of 103, and it reaches the end.
+
+    Both numbers are known before alignment starts, so there is no reason to
+    guess. The clamp catches the case where they do not describe each other —
+    a few pasted paragraphs against an hour of audio would otherwise compute
+    an absurdly slow rate and stretch every window over its neighbours.
+    """
+    chars = sum(len(line) for line in lines)
+    if total_sec <= 0 or chars == 0:
+        return CHARS_PER_SEC
+    measured = chars / total_sec
+    return min(max(measured, MIN_CHARS_PER_SEC), MAX_CHARS_PER_SEC)
 
 
-def batch_lines(lines: list[str]) -> list[list[str]]:
+def estimate_duration(line: str, rate: float = CHARS_PER_SEC) -> float:
+    return len(line) / rate
+
+
+def batch_lines(lines: list[str], rate: float = CHARS_PER_SEC) -> list[list[str]]:
     """Group consecutive lines into ~TARGET_BATCH_SEC batches (by estimate)."""
     batches: list[list[str]] = []
     current: list[str] = []
     acc = 0.0
     for line in lines:
         current.append(line)
-        acc += estimate_duration(line)
+        acc += estimate_duration(line, rate)
         if acc >= TARGET_BATCH_SEC:
             batches.append(current)
             current = []
@@ -60,12 +90,16 @@ def batch_lines(lines: list[str]) -> list[list[str]]:
 
 
 def window_for_batch(
-    cursor: float, batch: list[str], total_sec: float, widen: float = 1.0
+    cursor: float,
+    batch: list[str],
+    total_sec: float,
+    widen: float = 1.0,
+    rate: float = CHARS_PER_SEC,
 ) -> tuple[float, float]:
     """Search window for a batch starting at the running cursor."""
     # keep the window tight: extra slack lets the aligner latch onto
     # neighbouring (or repeated) content and drift
-    est = sum(estimate_duration(line) for line in batch)
+    est = sum(estimate_duration(line, rate) for line in batch)
     length = min((est * 1.2 + WINDOW_SLACK_SEC) * widen, MAX_WINDOW_SEC)
     return cursor, min(cursor + length, total_sec)
 
@@ -110,17 +144,21 @@ def align_script_lines(
     progress: Callable[[float], None] | None = None,
 ) -> list[AlignedLine]:
     """Align batches of consecutive lines; the cursor advances batch by batch."""
+    # Measured from THIS script against THIS audio; see chars_per_sec().
+    rate = chars_per_sec(lines, total_sec)
     out: list[AlignedLine] = []
     cursor = 0.0
     done = 0
-    for batch in batch_lines(lines):
+    for batch in batch_lines(lines, rate):
         words_per_line = [segment_words(line) for line in batch]
         all_words = [w for words in words_per_line for w in words]
 
         spans: list[WordSpan | None] | None = None
         if all_words:
             for widen in (1.0, 1.6):  # retry once with a wider window
-                w_start, w_end = window_for_batch(cursor, batch, total_sec, widen)
+                w_start, w_end = window_for_batch(
+                    cursor, batch, total_sec, widen, rate
+                )
                 try:
                     got = align_window(w_start, w_end, all_words)
                 except Exception:
@@ -137,7 +175,7 @@ def align_script_lines(
                 continue
             line_spans = spans[offset : offset + len(words)] if spans else None
             offset += len(words)
-            est_end = min(cursor + estimate_duration(line), total_sec)
+            est_end = min(cursor + estimate_duration(line, rate), total_sec)
             tokens = line_tokens(line, cursor, est_end, line_spans)
             out.append(
                 AlignedLine(text=line, start=tokens[0].start, end=tokens[-1].end, tokens=tokens)
