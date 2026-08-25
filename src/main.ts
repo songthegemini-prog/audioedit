@@ -827,6 +827,29 @@ function setup(): void {
     onPlayState: (playing) => {
       playBtn.textContent = playing ? "หยุด" : "เล่น";
     },
+    // Playback refused to start. Say so — and in long-file mode, where the
+    // audio comes from the backend over HTTP, try reconnecting once rather
+    // than making the editor reopen the file to get sound back.
+    onPlaybackProblem: (reason) => {
+      fileName.textContent = `เล่นเสียงไม่ได้: ${reason} — กำลังต่อเสียงใหม่…`;
+      void player
+        .revive()
+        .then((revived) => {
+          if (revived) {
+            // Reloading drops every drawn region. The cuts and markers still
+            // exist in the project — redraw them, or reconnecting would look
+            // like it had thrown the editor's work away.
+            afterEdlChange();
+            renderMarkers();
+          }
+          fileName.textContent = revived
+            ? `ต่อเสียงใหม่แล้ว (${reason}) — กดเล่นได้อีกครั้ง`
+            : `เล่นเสียงไม่ได้: ${reason}`;
+        })
+        .catch((err: unknown) => {
+          fileName.textContent = `ต่อเสียงใหม่ไม่สำเร็จ: ${String(err)}`;
+        });
+    },
     // Manual edge drags win verbatim — never re-snap over the user's hands
     // (FIXES.md #9). Waveform and spectrogram edit the same EDL entry.
     // Right-click a red band = take that one cut back. Undo walks the whole

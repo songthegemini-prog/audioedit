@@ -121,6 +121,10 @@ export interface AudioPlayerEvents {
   onMarkerMoved?: (markerId: string, time: number) => void;
   /** Visible time window changed (scroll/zoom/load) — drives the spectrogram. */
   onViewport?: (startSec: number, endSec: number) => void;
+  /** Playback was asked for and could not start. Never silent: pressing play
+   * and getting nothing, with no reason given, is the worst thing this app
+   * can do to an editor mid-session. */
+  onPlaybackProblem?: (reason: string) => void;
 }
 
 /**
@@ -131,6 +135,8 @@ export class AudioPlayer {
   private ws: WaveSurfer;
   private regions: RegionsPlugin;
   private loaded = false;
+  /** What loadStream was last given, so a stream that dies can be revived. */
+  private streamSource: { url: string; peaks: Float32Array; duration: number } | null = null;
   private loading = false; // a loadBlob/loadStream we initiated is in flight
   private rangeEnd: number | null = null; // "ฟังช่วงที่เลือก" stop point
   private skipCuts: readonly Cut[] | null = null; // test-cut mode
@@ -352,6 +358,7 @@ export class AudioPlayer {
 
   /** Reset to the empty state (New project): stop, drop audio, clear regions. */
   clear(): void {
+    this.streamSource = null;
     this.loaded = false;
     this.loading = false;
     this.rangeEnd = null;
@@ -371,6 +378,7 @@ export class AudioPlayer {
   }
 
   async loadBlob(blob: Blob): Promise<void> {
+    this.streamSource = null;
     this.loaded = false;
     this.loading = true;
     this.rangeEnd = null;
@@ -398,6 +406,7 @@ export class AudioPlayer {
    * SAME file the media element plays — display and playback stay same-PCM
    * (FIXES #7/#13) while the frontend never holds the audio in memory. */
   async loadStream(url: string, peaks: Float32Array, duration: number): Promise<void> {
+    this.streamSource = { url, peaks, duration };
     this.loaded = false;
     this.loading = true;
     this.rangeEnd = null;
@@ -434,8 +443,61 @@ export class AudioPlayer {
     }
   }
 
+  /** Why playback cannot start right now, or null if nothing is wrong.
+   *
+   * A media element that has errored stays errored: every later play() is
+   * rejected, so the transport looks dead until the file is reopened. That is
+   * exactly what an editor reported after a long alignment run — play and
+   * Space both did nothing, and only reopening the file brought it back
+   * (2026-08-25). The state is readable; it was simply never read. */
+  playbackProblem(): string | null {
+    if (!this.loaded) return "ยังไม่ได้โหลดไฟล์เสียง";
+    const media = this.ws.getMediaElement();
+    const err = media?.error;
+    if (!err) return null;
+    const why: Record<number, string> = {
+      1: "การโหลดเสียงถูกยกเลิก",
+      2: "การเชื่อมต่อกับตัวอ่านเสียงหลุด",
+      3: "ถอดรหัสเสียงไม่สำเร็จ",
+      4: "เปิดไฟล์เสียงนี้ไม่ได้",
+    };
+    return why[err.code] ?? `ตัวเล่นเสียงมีปัญหา (รหัส ${err.code})`;
+  }
+
+  /** Reload the stream after it died, keeping the play position.
+   *
+   * Only long-file mode can do this: it is the one case where the audio lives
+   * behind a URL that can simply be requested again. Returns whether a reload
+   * was actually attempted. */
+  async revive(): Promise<boolean> {
+    const source = this.streamSource;
+    if (!source) return false;
+    const at = this.ws.getCurrentTime();
+    // loadStream clears these because it normally means a DIFFERENT file, and
+    // one file's cuts must never be applied to another. Here it is the same
+    // file coming back, so they have to be put back — otherwise reconnecting
+    // would quietly make the editor's cuts audible again.
+    const cuts = this.skipCuts;
+    const scope = this.scope;
+    const loop = this.loopScope;
+    await this.loadStream(source.url, source.peaks, source.duration);
+    this.skipCuts = cuts;
+    this.scope = scope;
+    this.loopScope = loop;
+    if (at > 0 && at < source.duration) this.ws.setTime(at);
+    return true;
+  }
+
   playPause(): void {
-    if (!this.loaded) return;
+    if (!this.loaded) {
+      this.events.onPlaybackProblem?.("ยังไม่ได้โหลดไฟล์เสียง");
+      return;
+    }
+    const problem = this.playbackProblem();
+    if (problem) {
+      this.events.onPlaybackProblem?.(problem);
+      return;
+    }
     this.ensureAudioRunning();
     this.rangeEnd = null; // stale range stops killed normal playback (FIXES.md #11)
     this.previewSkip = null;
@@ -445,7 +507,11 @@ export class AudioPlayer {
       const t = this.ws.getCurrentTime();
       if (t < this.scope.start || t >= this.scope.end) this.ws.setTime(this.scope.start);
     }
-    void this.ws.playPause();
+    // A rejected play() used to vanish here. It is the whole reason "I press
+    // play and nothing happens" could reach an editor with no explanation.
+    void this.ws.playPause().catch((err: unknown) => {
+      this.events.onPlaybackProblem?.(this.playbackProblem() ?? String(err));
+    });
   }
 
   /** Lock playback to [start, end] ("กั้นหน้ากั้นหลัง"); null clears it. */
