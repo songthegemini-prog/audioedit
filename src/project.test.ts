@@ -590,3 +590,91 @@ describe("editing text never moves the audio (asked 2026-08-24)", () => {
     expect(times(p)).toEqual(times(project()));
   });
 })
+
+describe("keep the words, drop the sound (asked 2026-08-24)", () => {
+  /** A cut used to be all-or-nothing: taking one back to fix the words brought
+   * the audio back too. When alignment is off, the audio half is usually the
+   * CORRECT half — the editor saw it on the waveform — so undoing everything
+   * threw away good work. */
+  const project = () => {
+    const p = new Project("/a.wav", {
+      text: "หนึ่งสองสาม",
+      segments: [{ text: "หนึ่งสองสาม", start: 0, end: 3 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สาม", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+    p.addCut({ start: 0.9, end: 2.1, tokenRange: [1, 1] });
+    return p;
+  };
+
+  it("a cut still takes its words by default", () => {
+    expect(project().exportLines().join("")).toBe("หนึ่งสาม");
+  });
+
+  it("a kept word returns to the document while its audio stays cut", () => {
+    const p = project();
+    p.toggleKeepInDoc(1);
+
+    expect(p.exportLines().join("")).toBe("หนึ่งสองสาม");
+    expect(p.isTokenCut(1)).toBe(true); // the audio is still gone
+    expect(p.edl).toHaveLength(1); // and the cut itself is untouched
+  });
+
+  it("keeping is reversible", () => {
+    const p = project();
+    p.toggleKeepInDoc(1);
+    p.toggleKeepInDoc(1);
+
+    expect(p.exportLines().join("")).toBe("หนึ่งสาม");
+    expect(p.isKeptInDoc(1)).toBe(false);
+  });
+
+  it("keeping clears 'not content', which says the opposite", () => {
+    // Holding both would make the export depend on which check runs first.
+    const p = project();
+    p.toggleExclude(1);
+    p.toggleKeepInDoc(1);
+
+    expect(p.isExcluded(1)).toBe(false);
+    expect(p.exportLines().join("")).toBe("หนึ่งสองสาม");
+  });
+
+  it("survives a save and reload", () => {
+    // The flag is editing state, so it belongs in the project file — losing it
+    // would silently revert the editor's decision on the next open.
+    const p = project();
+    p.toggleKeepInDoc(1);
+
+    const reloaded = Project.parse(p.serialize());
+
+    expect(reloaded.isKeptInDoc(1)).toBe(true);
+    expect(reloaded.exportLines().join("")).toBe("หนึ่งสองสาม");
+  });
+
+  it("works for a waveform-only cut, which has no token range", () => {
+    // tokenRange is null there, so the word is caught by TIME instead — the
+    // path that would be easy to miss.
+    const p = new Project("/a.wav", {
+      text: "หนึ่งสองสาม",
+      segments: [{ text: "หนึ่งสองสาม", start: 0, end: 3 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สาม", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+    p.addCut({ start: 0.95, end: 2.05, tokenRange: null });
+    expect(p.exportLines().join("")).toBe("หนึ่งสาม");
+
+    p.toggleKeepInDoc(1);
+
+    expect(p.exportLines().join("")).toBe("หนึ่งสองสาม");
+  });
+})

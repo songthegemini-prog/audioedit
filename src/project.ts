@@ -5,6 +5,16 @@ import type { Token, TranscribeResult } from "./api";
 export interface TokenEdit {
   editedText?: string;
   excludeFromDoc?: boolean;
+  /** Keep this word in the .docx even though a cut removed its audio.
+   *
+   * The fourth editing state, and the mirror of excludeFromDoc. It exists
+   * because a cut used to be all-or-nothing: taking one back to fix the words
+   * brought the audio back with it, so an editor who had cut the right sound
+   * but the wrong words had no way to keep one and undo the other (asked
+   * 2026-08-24). That situation is not rare — alignment can be off, and the
+   * audio is what the editor SEES, so the audio is usually the correct half.
+   */
+  keepInDoc?: boolean;
 }
 
 /** One deleted region in the edit decision list. The source audio is never
@@ -172,6 +182,29 @@ export class Project {
     return this.edits.get(i)?.excludeFromDoc === true;
   }
 
+  /** Kept in the .docx despite its audio being cut. */
+  isKeptInDoc(i: number): boolean {
+    return this.edits.get(i)?.keepInDoc === true;
+  }
+
+  /** Flip "keep the words, drop the sound".
+   *
+   * Only meaningful for a token a cut covers; on any other token it is stored
+   * but has no effect, which is harmless and keeps the toggle stateless.
+   * Clears excludeFromDoc, because the two say opposite things about the same
+   * word and holding both would make the export depend on check order.
+   */
+  toggleKeepInDoc(i: number): void {
+    const edit = { ...this.edits.get(i) };
+    if (edit.keepInDoc) {
+      delete edit.keepInDoc;
+    } else {
+      edit.keepInDoc = true;
+      delete edit.excludeFromDoc;
+    }
+    this.storeEdit(i, edit);
+  }
+
   /** Set the corrected spelling. Empty text or the original text clears the fix. */
   setEditedText(i: number, text: string): void {
     const edit = { ...this.edits.get(i) };
@@ -297,7 +330,10 @@ export class Project {
       const [first, end] = this.segmentTokenRange(s);
       let line = "";
       for (let i = first; i < end; i++) {
-        if (this.isExcluded(i) || this.isTokenRemoved(i)) continue;
+        if (this.isExcluded(i)) continue;
+        // A cut normally takes the words with it — unless the editor said
+        // to keep this one, having judged the audio right and the words wrong.
+        if (this.isTokenRemoved(i) && !this.isKeptInDoc(i)) continue;
         line += this.effectiveText(i);
       }
       if (line.trim()) lines.push(line.trim());

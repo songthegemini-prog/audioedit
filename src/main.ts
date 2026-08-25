@@ -145,6 +145,10 @@ function setup(): void {
    */
   const isSearchable = (i: number): boolean => {
     if (!hideExcluded || !project) return true;
+    // A kept word is still "cut" as far as the EDL is concerned, but it is on
+    // screen and in the document — so it must be searchable, or the search and
+    // the transcript disagree again in a new way (FIXES.md #56).
+    if (project.isKeptInDoc(i)) return true;
     return !project.isExcluded(i) && !project.isTokenCut(i);
   };
 
@@ -236,6 +240,25 @@ function setup(): void {
       transcript.refresh(i);
       updateDirty();
       runSearch(false); // the word may have just left (or rejoined) the view
+    },
+    // Shift+right-click on a cut word: keep the words, leave the sound cut.
+    // The half the editor can SEE (the waveform) is usually the correct half,
+    // so undoing the whole cut just to fix the text threw away good work.
+    onKeepInDoc: (i) => {
+      if (!project) return;
+      if (!project.isTokenRemoved(i)) {
+        fileName.textContent =
+          "คำนี้เสียงยังอยู่ — ใช้ได้เฉพาะคำที่ถูกตัดเสียงไปแล้ว " +
+          "(คลิกขวาธรรมดาเพื่อขีดฆ่าไม่ให้เข้าเอกสาร)";
+        return;
+      }
+      project.toggleKeepInDoc(i);
+      transcript.refresh(i);
+      updateDirty();
+      runSearch(false); // the word just entered or left the visible text
+      fileName.textContent = project.isKeptInDoc(i)
+        ? `📝 เก็บคำ "${project.effectiveText(i)}" ไว้ในเอกสาร (เสียงยังถูกตัดอยู่)`
+        : `คำ "${project.effectiveText(i)}" กลับไปหายตามเสียงที่ตัดแล้ว`;
     },
     onEditStart: () => player.pause(),
     // Text-editor model: selecting pauses audio, moves the playhead to the

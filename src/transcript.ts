@@ -25,6 +25,8 @@ export function releaseOutsideTextFocus(keep: HTMLElement): void {
 export interface TranscriptCallbacks {
   onEditText: (index: number, text: string) => void;
   onToggleExclude: (index: number) => void;
+  /** Shift+right-click: keep this word in the .docx though its audio is cut. */
+  onKeepInDoc: (index: number) => void;
   /** Entering inline edit — host should pause playback. */
   onEditStart: () => void;
   /** Word-range selection changed (null = cleared). Selecting never plays —
@@ -112,7 +114,12 @@ export class TranscriptView {
       const i = tokenAt(e);
       if (i === null) return;
       e.preventDefault();
-      this.callbacks.onToggleExclude(i);
+      // Shift is what separates "give me the sound back" from "keep the words
+      // and leave the sound cut" — a cut used to be all-or-nothing, so an
+      // editor who had cut the right audio but the wrong words could only undo
+      // both (asked 2026-08-24).
+      if ((e as MouseEvent).shiftKey) this.callbacks.onKeepInDoc(i);
+      else this.callbacks.onToggleExclude(i);
     });
   }
 
@@ -299,7 +306,11 @@ export class TranscriptView {
     }
     if (project.isEdited(i)) classes.push("token-edited");
     if (project.isExcluded(i)) classes.push("token-excluded");
-    if (project.isTokenCut(i)) classes.push("token-cut");
+    if (project.isTokenCut(i)) {
+      // A kept word still lost its audio, so it must not look untouched — but
+      // it must not look deleted either, since it IS going into the document.
+      classes.push(project.isKeptInDoc(i) ? "token-kept" : "token-cut");
+    }
     if (this.selection && i >= this.selection[0] && i <= this.selection[1]) {
       classes.push("token-selected");
     }
@@ -312,6 +323,7 @@ export class TranscriptView {
     const parts = [`${token.start.toFixed(2)}–${token.end.toFixed(2)} วินาที${conf}`];
     if (project.isEdited(i)) parts.push(`ASR เดิม: ${token.text}`);
     if (project.isExcluded(i)) parts.push("ไม่ใช่เนื้อหา (เสียงยังอยู่)");
+    if (project.isKeptInDoc(i)) parts.push("เสียงถูกตัด แต่เก็บคำไว้ในเอกสาร");
     span.title = parts.join(" | ");
   }
 

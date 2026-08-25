@@ -355,6 +355,19 @@ body {
   opacity: 0.55;
 }
 
+/* Audio cut, words kept (Shift+right-click). It must read as neither
+   untouched nor deleted: the sound really is gone, but this word IS going
+   into the .docx, and confusing the two is how an editor ships a document
+   that does not match the audio. */
+.token-kept {
+  color: #d2a8ff;
+  border-bottom: 2px dashed #a371f7;
+}
+
+/* No hide rule for this one on purpose: token-kept REPLACES token-cut rather
+   than joining it, so "ซ่อนคำที่ไม่ใช้" leaves kept words on screen — which is
+   right, because a kept word is content and is going into the .docx. */
+
 .token-selected {
   background-color: rgba(80, 140, 255, 0.35);
   outline: 1px solid rgba(80, 140, 255, 0.7);

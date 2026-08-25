@@ -31,10 +31,14 @@ primary flow. Everything runs locally; no audio or text ever leaves the machine.
   forced alignment. The frontend talks to it over local HTTP/IPC only.
 - Core data structure (the spine of the whole app): a token list where each
   token = { text, start, end, isFiller, docCharRange, confidence }, plus
-  editing state = { editedText, excludeFromDoc }. Three distinct user actions,
-  never conflated: (1) fix spelling → editedText, audio untouched;
+  editing state = { editedText, excludeFromDoc, keepInDoc }. FOUR distinct user
+  actions, never conflated: (1) fix spelling → editedText, audio untouched;
   (2) exclude from doc (filler/noise) → excludeFromDoc=true, audio untouched;
-  (3) cut → EDL entry, removes audio AND text on export. This map links
+  (3) cut → EDL entry, removes audio AND text on export;
+  (4) keep the words though the sound is cut → keepInDoc=true, EDL untouched
+  (added 2026-08-24: a cut was all-or-nothing, so an editor who had cut the
+  right audio but the wrong words could only undo both — and the audio half,
+  being the half they can SEE, is usually the correct one). This map links
   transcript ↔ audio ↔ .docx and drives search, highlight, cut, and export.
   When a change affects this data model, PAUSE and ask before proceeding.
 
