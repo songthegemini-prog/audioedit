@@ -51,7 +51,24 @@ export class MemorySamples implements SampleProvider {
 // scrolls and repeated snaps reuse the same cached window.
 const GRID_SEC = 5;
 const LRU_WINDOWS = 4;
-export const REMOTE_MAX_WINDOW_SEC = 110; // backend caps /pcm at 120s
+const REMOTE_FETCH_CAP_SEC = 110; // backend caps /pcm at 120s
+
+/** The longest window a caller may ASK for and be sure of getting back.
+ *
+ * Smaller than the fetch cap on purpose. gridRange snaps the requested range
+ * outward onto the grid — down at the start, up at the end — so a request can
+ * grow by a grid step at each end before the cap is applied, and the cap then
+ * takes the excess off the END. A caller that asked for the full 110s got a
+ * window ending up to 5s short of its request, every time.
+ *
+ * That mattered because the drawing code treats "window does not cover what I
+ * need" as "still loading" and refetches: the request could never be
+ * satisfied, so it refetched forever and the panel read
+ * "กำลังโหลด spectrogram…" with the app sitting idle (reported 2026-08-25).
+ * windowCovers fixed the judgement; this makes the advertised number true, so
+ * the two grid steps are subtracted here rather than left as a trap.
+ */
+export const REMOTE_MAX_WINDOW_SEC = REMOTE_FETCH_CAP_SEC - 2 * GRID_SEC;
 
 export type WindowFetcher = (
   startSec: number,
@@ -63,7 +80,7 @@ export function gridRange(
   startSec: number,
   endSec: number,
   durationSec: number,
-  maxWindowSec: number = REMOTE_MAX_WINDOW_SEC,
+  maxWindowSec: number = REMOTE_FETCH_CAP_SEC,
   gridSec: number = GRID_SEC,
 ): { start: number; end: number } {
   const start = Math.max(0, Math.floor(startSec / gridSec) * gridSec);

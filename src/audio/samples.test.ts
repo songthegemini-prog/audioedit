@@ -54,9 +54,25 @@ describe("gridRange", () => {
     expect(gridRange(597, 640, 600)).toEqual({ start: 595, end: 600 });
   });
 
-  it("never exceeds the max window", () => {
+  it("never asks the backend for more than it accepts", () => {
+    // /pcm caps at 120s; the fetch cap sits under that with room to spare.
     const r = gridRange(0, 500, 600);
-    expect(r.end - r.start).toBeLessThanOrEqual(REMOTE_MAX_WINDOW_SEC);
+    expect(r.end - r.start).toBeLessThanOrEqual(120);
+  });
+
+  it("always covers a request up to the window size it advertises", () => {
+    // maxWindowSec is a promise to callers, and the drawing code believes it:
+    // a window that comes back short of the request reads as "still loading"
+    // and is refetched, forever (reported 2026-08-25). Snapping onto the grid
+    // widens a request at both ends before the fetch cap trims the end, so
+    // the advertised size has to leave room for that.
+    for (let span = 1; span <= REMOTE_MAX_WINDOW_SEC; span += 0.5) {
+      for (let start = 0; start < 20; start += 0.3) {
+        const r = gridRange(start, start + span, 600);
+        expect(r.start, `${start}s +${span}s`).toBeLessThanOrEqual(start);
+        expect(r.end, `${start}s +${span}s`).toBeGreaterThanOrEqual(start + span);
+      }
+    }
   });
 });
 

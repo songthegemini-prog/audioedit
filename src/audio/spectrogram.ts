@@ -69,6 +69,28 @@ export function windowRangeFor(
   };
 }
 
+/** Does a fetched window hold everything needed to draw [from, to]?
+ *
+ * Tested against the range actually DRAWN, never against the padded range
+ * that was requested. The padding above is opportunistic prefetch, and a
+ * provider is free to return less than it was asked for -- RemoteSamples
+ * snaps the range onto a 5s grid and then caps the width, which can leave
+ * the end up to a grid step short. Demanding the full padded range back made
+ * this test unsatisfiable for any viewport wider than ~35s: the view never
+ * counted as ready, so every frame refetched and re-rendered in an endless
+ * loop with "กำลังโหลด spectrogram…" pinned on screen (reported 2026-08-25,
+ * with nothing being done to the app at the time).
+ */
+export function windowCovers(
+  win: { startSec: number; data: { length: number }; sampleRate: number } | null,
+  from: number,
+  to: number,
+): boolean {
+  if (!win) return false;
+  const end = win.startSec + win.data.length / win.sampleRate;
+  return win.startSec <= from + 1e-6 && end >= to - 1e-6;
+}
+
 /** Smallest analysis window we will use, however far in the view is zoomed.
  *
  * Tying the window to the hop alone is right in principle -- a wide view needs
@@ -147,6 +169,7 @@ export class SpectrogramView {
   private provider: SampleProvider | null = null;
   private window: SampleWindow | null = null; // covers the viewport (+margin)
   private fetchGen = 0; // stale async fetches are dropped
+  private fetchFailed = false; // last /pcm request errored — nothing is loading
   private viewStart = 0;
   private viewEnd = 0;
   private cuts: readonly Cut[] = [];
@@ -297,10 +320,17 @@ export class SpectrogramView {
     ctx.fillStyle = "#8a8a94";
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center";
+    // State the real limit. It was hard-coded as "2 นาที" while the provider
+    // actually served 110s, and now serves 100 — a number that drifts from the
+    // code is worse than no number, because the editor zooms to what it says
+    // and the picture still refuses to appear.
+    const limit = Math.floor(this.provider.maxWindowSec / 10) * 10;
     const msg =
       span > this.provider.maxWindowSec
-        ? "ไฟล์ยาว — ซูมเข้า (ช่วงที่มอง ≤ 2 นาที) เพื่อดู spectrogram"
-        : "กำลังโหลด spectrogram…";
+        ? `ไฟล์ยาว — ซูมเข้า (ช่วงที่มอง ≤ ${limit} วินาที) เพื่อดู spectrogram`
+        : this.fetchFailed
+          ? "โหลด spectrogram ไม่สำเร็จ — เลื่อนหรือซูมเพื่อลองใหม่"
+          : "กำลังโหลด spectrogram…";
     ctx.fillText(msg, width / 2, height / 2);
   }
 
@@ -322,23 +352,30 @@ export class SpectrogramView {
       provider.maxWindowSec,
       provider.durationSec,
     );
-    const w = this.window;
-    if (
-      w &&
-      w.startSec <= needFrom + 1e-6 &&
-      w.startSec + w.data.length / w.sampleRate >= needTo - 1e-6
-    ) {
-      return true;
-    }
+    // What this frame must have on hand to draw: the viewport plus the FFT
+    // margin. NOT the padded range fetched below — see windowCovers.
+    const mustFrom = Math.max(0, this.viewStart - marginSec);
+    const mustTo = Math.min(provider.durationSec, this.viewEnd + marginSec);
+    if (windowCovers(this.window, mustFrom, mustTo)) return true;
 
     const gen = ++this.fetchGen;
+    this.fetchFailed = false;
     void provider.getWindow(needFrom, needTo).then(
       (win) => {
         if (gen !== this.fetchGen) return; // superseded by a newer viewport
         this.window = win;
         this.invalidateBase();
       },
-      () => undefined, // fetch failed — keep whatever we had
+      () => {
+        // Keep whatever we had, but stop claiming to be loading. Saying
+        // "กำลังโหลด" when the request has already failed leaves the editor
+        // waiting on something that will never arrive. Do NOT re-render here:
+        // that re-enters ensureWindow and hot-loops against a failing
+        // backend, the same trap wavedetail avoids. The label corrects itself
+        // on the next viewport change, which is also when the fetch retries.
+        if (gen !== this.fetchGen) return;
+        this.fetchFailed = true;
+      },
     );
     return false;
   }

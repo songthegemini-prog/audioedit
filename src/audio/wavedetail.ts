@@ -11,7 +11,7 @@
  */
 
 import type { SampleProvider, SampleWindow } from "./samples";
-import { windowRangeFor } from "./spectrogram";
+import { windowCovers, windowRangeFor } from "./spectrogram";
 
 const WAVE_COLOR = "#8ab4f8"; // matches the app's progress-side waveform blue
 const CENTER_LINE = "rgba(138, 180, 248, 0.35)";
@@ -172,14 +172,10 @@ export class WaveformDetail {
       provider.maxWindowSec,
       provider.durationSec,
     );
-    const w = this.window;
-    if (
-      w &&
-      w.startSec <= needFrom + 1e-6 &&
-      w.startSec + w.data.length / w.sampleRate >= needTo - 1e-6
-    ) {
-      return true;
-    }
+    // Coverage is judged on the viewport alone, for the reason spelled out on
+    // windowCovers: the padded range is prefetch, and testing for it made the
+    // view permanently "not ready" and hot-looped the fetch.
+    if (windowCovers(this.window, this.viewStart, this.viewEnd)) return true;
     const gen = ++this.fetchGen;
     void provider.getWindow(needFrom, needTo).then(
       (win) => {

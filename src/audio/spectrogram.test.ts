@@ -6,8 +6,10 @@ import {
   MIN_FFT_SIZE,
   planFrame,
   rowToBin,
+  windowCovers,
   windowRangeFor,
 } from "./spectrogram";
+import { gridRange, REMOTE_MAX_WINDOW_SEC } from "./samples";
 
 describe("chooseFftSize", () => {
   it("keeps the window at least twice the hop", () => {
@@ -176,5 +178,60 @@ describe("windowRangeFor survives playback scrolling", () => {
   it("covers scrolling backwards too, for a seek that jumps back", () => {
     const { from } = windowRangeFor(100, 110, MARGIN, MAX, DURATION);
     expect(from).toBeLessThanOrEqual(95);
+  });
+});
+
+describe("windowCovers", () => {
+  const win = (startSec: number, lenSec: number, sampleRate = 100) => ({
+    startSec,
+    data: { length: lenSec * sampleRate },
+    sampleRate,
+  });
+
+  it("is false when there is no window at all", () => {
+    expect(windowCovers(null, 10, 20)).toBe(false);
+  });
+
+  it("accepts a window that spans the range, and rejects one short at either end", () => {
+    expect(windowCovers(win(10, 10), 12, 18)).toBe(true);
+    expect(windowCovers(win(13, 10), 12, 18)).toBe(false); // starts too late
+    expect(windowCovers(win(10, 5), 12, 18)).toBe(false); // ends too early
+  });
+
+  it("stays ready for every viewport the remote provider can serve", () => {
+    /* The loop this guards against. windowRangeFor asks for padding on both
+     * sides, RemoteSamples snaps that onto a 5s grid and caps the width, and
+     * so hands back a range that can end short of the request. Judging
+     * readiness on the REQUEST meant ensureWindow returned false forever:
+     * every frame refetched, re-rendered, refetched, and the panel showed
+     * "กำลังโหลด spectrogram…" while the app sat idle (reported 2026-08-25).
+     * It bit ~69% of viewports — everything wider than about 35 seconds.
+     *
+     * The contract that actually matters: whatever the provider returns must
+     * be enough to DRAW the viewport. */
+    const duration = 3000;
+    const margin = 0.03; // an FFT half-window at 44.1kHz
+    for (let span = 5; span <= REMOTE_MAX_WINDOW_SEC; span += 1) {
+      for (let viewStart = 100; viewStart < 130; viewStart += 0.7) {
+        const viewEnd = viewStart + span;
+        const need = windowRangeFor(
+          viewStart,
+          viewEnd,
+          margin,
+          REMOTE_MAX_WINDOW_SEC,
+          duration,
+        );
+        const got = gridRange(need.from, need.to, duration);
+        const served = {
+          startSec: got.start,
+          data: { length: Math.round((got.end - got.start) * 100) },
+          sampleRate: 100,
+        };
+        expect(
+          windowCovers(served, viewStart - margin, viewEnd + margin),
+          `viewport ${viewStart.toFixed(1)}s +${span}s`,
+        ).toBe(true);
+      }
+    }
   });
 });
