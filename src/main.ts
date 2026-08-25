@@ -1424,7 +1424,9 @@ function setup(): void {
     idleLabel: string,
     verb: string,
     progressEl: HTMLElement,
-    onDone: (result: NonNullable<import("./api").JobState["result"]>) => void,
+    onDone: (
+      result: NonNullable<import("./api").JobState["result"]>,
+    ) => void | Promise<void>,
   ) => {
     activeJobId = jobId;
     cancelJobBtn.hidden = false;
@@ -1460,7 +1462,14 @@ function setup(): void {
           progressEl.textContent = `${verb}ไม่สำเร็จ: ${job.error ?? "ไม่ทราบสาเหตุ"}`;
           return;
         }
-        onDone(job.result);
+        // onDone may be async, and the try/catch around this cannot see into
+        // it: an async callback returns a promise here and rejects later, on
+        // its own. The export callback is what writes the .docx, so a failure
+        // there was reported nowhere at all — the audio appeared, the document
+        // did not, and the app said nothing (reported 2026-08-25).
+        void Promise.resolve(onDone(job.result)).catch((err) => {
+          progressEl.textContent = `${verb}สำเร็จ แต่ขั้นตอนถัดไปไม่สำเร็จ: ${String(err)}`;
+        });
       } catch (err) {
         window.clearInterval(poll);
         finish();
@@ -1543,15 +1552,21 @@ function setup(): void {
 
   // --- export: render EDL to a new WAV (+ optional matching .docx) ---
   // Save the edited script (.docx or .txt) — shared by both export paths.
-  const exportScript = async (proj: Project, base: string): Promise<string | null> => {
-    const scriptOut = await save({
+  /** Ask where the script goes. Deliberately called BEFORE the audio render
+   * starts, and never from the job-polling callback: a native dialog opened
+   * from a timer tick arrives minutes after the click, with no context, long
+   * after the editor has moved on. Asking for both destinations up front also
+   * means a cancel is known before any work is done. */
+  const askScriptPath = (base: string): Promise<string | null> =>
+    save({
       defaultPath: `${base}-edited.docx`,
       filters: [
         { name: "Word", extensions: ["docx"] },
         { name: "Text", extensions: ["txt"] },
       ],
     });
-    if (!scriptOut) return null;
+
+  const writeScript = async (proj: Project, scriptOut: string): Promise<void> => {
     // Markers ride along at the end, under a heading, so the editor can lift
     // them straight onto the cover sheet (ใบปะหน้า) without a second export.
     // exportLines() stays the clean CONTENT — CLAUDE.md's rule that the doc
@@ -1565,7 +1580,6 @@ function setup(): void {
     } else {
       await exportDocx(scriptOut, lines);
     }
-    return scriptOut;
   };
 
   // "จะ export อะไรบ้าง?" — native <dialog>, resolves both/doc/cancel
@@ -1783,8 +1797,11 @@ function setup(): void {
       // Doc-only: no audio render, no rough-timestamp warning (text content
       // doesn't depend on word times — only cut boundaries do).
       try {
-        const out = await exportScript(proj, base);
-        if (out) fileName.textContent = `✅ Export บทแล้ว: ${out}`;
+        const out = await askScriptPath(base);
+        if (out) {
+          await writeScript(proj, out);
+          fileName.textContent = `✅ Export บทแล้ว: ${out}`;
+        }
       } catch (err) {
         fileName.textContent = `Export ไม่สำเร็จ: ${String(err)}`;
       }
@@ -1807,6 +1824,9 @@ function setup(): void {
       filters: [{ name: format.toUpperCase(), extensions: [extension] }],
     });
     if (!audioPath) return;
+    // Both destinations are chosen now, while the editor is still in the
+    // export. Cancelling this one means audio only, and the result says so.
+    const scriptOut = await askScriptPath(base);
     const verify = verifyCheck.checked;
     exportBtn.disabled = true;
     try {
@@ -1820,8 +1840,18 @@ function setup(): void {
         const r = result as ExportAudioResult;
         const depth = r.bits === null ? "MP3 192kbps" : `${r.bits}-bit`;
         let message = `✅ Export เสียงแล้ว: ${r.out_path} (${formatTime(r.duration)}, ${depth})`;
-        const scriptOut = await exportScript(proj, base);
-        if (scriptOut) message += ` + ${scriptOut}`;
+        if (scriptOut) {
+          try {
+            await writeScript(proj, scriptOut);
+            message += ` + ${scriptOut}`;
+          } catch (err) {
+            // The audio DID export. Tell both halves of the truth rather than
+            // letting the document fail in silence.
+            message += ` — แต่ export บทไม่สำเร็จ: ${String(err)}`;
+          }
+        } else {
+          message += " (ไม่ได้ export บท)";
+        }
         fileName.textContent = message;
         if (verify) {
           fileName.textContent = `${message} — กำลังตรวจพลังเสียง…`;
