@@ -777,3 +777,30 @@ describe("undo covers text edits, not only cuts (reported 2026-08-24)", () => {
     expect(p.canRedo).toBe(false);
   });
 })
+
+describe("what a re-transcribe or re-align does to corrections (asked 2026-08-24)", () => {
+  it("a new transcription result carries NO word edits with it", () => {
+    // adoptResult() builds a brand new Project from the result and copies only
+    // the EDL across, so every correction is dropped. Pinned here because the
+    // behaviour is defensible but must never be SILENT — the UI has to say how
+    // many edits are about to go.
+    const before = new Project("/a.wav", {
+      text: "หนึ่งสอง",
+      segments: [{ text: "หนึ่งสอง", start: 0, end: 2 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+    before.setEditedText(0, "แก้แล้ว");
+    before.toggleExclude(1);
+    expect(before.editCount).toBe(2);
+
+    const after = new Project("/a.wav", before.transcription);
+
+    expect(after.editCount).toBe(0);
+    expect(after.effectiveText(0)).toBe("หนึ่ง");
+  });
+})

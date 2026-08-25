@@ -224,6 +224,17 @@ export class Project {
     return this.edits.get(i)?.editedText !== undefined;
   }
 
+  /** How many words carry a human edit.
+   *
+   * Used to warn before a re-transcribe throws them away: adoptResult builds a
+   * fresh Project and carries only the EDL, so corrections are lost. That is
+   * defensible — new text replaces old — but it must never happen silently
+   * (asked 2026-08-24).
+   */
+  get editCount(): number {
+    return this.edits.size;
+  }
+
   isExcluded(i: number): boolean {
     return this.edits.get(i)?.excludeFromDoc === true;
   }

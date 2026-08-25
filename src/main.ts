@@ -1409,8 +1409,35 @@ function setup(): void {
     if (activeJobId) void cancelJob(activeJobId);
   });
 
+  /** Ask before a re-run throws away word corrections.
+   *
+   * adoptResult builds a fresh Project from the new result and carries only
+   * the EDL, so every editedText / struck-out word / kept word goes. That is
+   * the right behaviour — new text replaces old — but doing it silently loses
+   * work the editor may have spent an afternoon on, especially on a machine
+   * with no models where correcting words is ALL they can do (asked
+   * 2026-08-24).
+   *
+   * Returns false if the user backs out.
+   */
+  const confirmDiscardEdits = (what: string): boolean => {
+    const n = project?.editCount ?? 0;
+    if (n === 0) return true;
+    const lines = [
+      `${what}จะสร้างบทขึ้นใหม่ทั้งหมด — คำที่แก้ไว้ ${n} คำจะหายไป`,
+      "",
+      "ถ้ายังไม่อยากให้หาย ให้กดยกเลิก แล้ว Export บทเก็บไว้ก่อน",
+      '(ปุ่ม Export → "เฉพาะบท") จากนั้นค่อยใช้ "ตรึงบท (มีบทแล้ว)"',
+      "กับไฟล์บทนั้นแทน — วิธีนั้นเก็บคำที่แก้ไว้ครบ",
+      "",
+      "กดตกลงเพื่อทำต่อและทิ้งคำที่แก้ไว้",
+    ];
+    return window.confirm(lines.join("\n"));
+  };
+
   transcribeBtn.addEventListener("click", async () => {
     if (!currentPath) return;
+    if (!confirmDiscardEdits("การถอดเสียงใหม่")) return;
     const audioPath = currentPath;
     const gen = loadGeneration;
     transcribeBtn.disabled = true;
@@ -1428,6 +1455,7 @@ function setup(): void {
 
   alignScriptBtn.addEventListener("click", async () => {
     if (!currentPath) return;
+    if (!confirmDiscardEdits("การตรึงบท")) return;
     const audioPath = currentPath;
     const gen = loadGeneration;
     const scriptPath = await open({
