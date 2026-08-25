@@ -24,7 +24,16 @@ CHARS_PER_SEC = 12.0
 MIN_CHARS_PER_SEC = 4.0
 MAX_CHARS_PER_SEC = 20.0
 WINDOW_SLACK_SEC = 5.0
-MAX_WINDOW_SEC = 60.0  # bounds wav2vec2 memory per call
+# Bounds wav2vec2 memory per call — and, not by design, keeps the window close
+# to the length of the words in it. A batch of two lines needs ~58s of audio at
+# a 9 char/sec read, and this cap trims the 1.2x headroom back to ~60s, which
+# is the tightness forced alignment wants. Loosening it is not an improvement:
+# raising it to 90s dropped the team's file from 77 of 103 lines to 7, and
+# splitting into smaller batches (40s window for 29s of words) gave 3. A sweep
+# of the multiplier was not even monotonic — 1.05 scored 58, 1.10 scored 13.
+# Treat these three numbers as one calibrated set and re-measure end to end if
+# any of them changes (2026-08-24).
+MAX_WINDOW_SEC = 60.0
 # Lines are aligned in ~35s batches: forced alignment spreads the target over
 # the WHOLE window, so a window must contain (almost) exactly the words being
 # aligned — aligning line-by-line with loose windows stretches each line over
