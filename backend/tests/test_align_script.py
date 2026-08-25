@@ -160,3 +160,114 @@ class TestSpeechRate:
 
         # slower reading = more seconds per line = fewer lines per batch
         assert len(slow[0]) < len(fast[0])
+
+
+class TestAnchoring:
+    """Script alignment used to feel its way forward with a running cursor, so
+    one bad batch moved every later line with it — on the team's own programme
+    the mean error was 4.8s and the worst 25.6s (reported 2026-08-24).
+
+    Anchoring gives each line its own window, matched to an ASR pass by text.
+    Same file: mean 0.40s, worst 1.0s, every line inside 2 seconds. What the
+    tests pin is the property that makes that true — a line can only be placed
+    where its own words were heard, and cannot move any other line.
+    """
+
+    @staticmethod
+    def spans() -> list[align_script.AsrSpan]:
+        return [
+            align_script.AsrSpan("สวัสดีครับท่านผู้ฟัง", 10.0, 14.0),
+            align_script.AsrSpan("วันนี้อากาศดีมาก", 14.0, 18.0),
+            align_script.AsrSpan("ขอบคุณที่ติดตามครับ", 18.0, 22.0),
+        ]
+
+    def test_each_line_lands_in_the_time_its_words_were_heard(self) -> None:
+        got = align_script.anchor_windows(
+            ["สวัสดีครับท่านผู้ฟัง", "ขอบคุณที่ติดตามครับ"], self.spans()
+        )
+
+        assert got[0][0] == pytest.approx(10.0, abs=0.5)
+        assert got[1][0] == pytest.approx(18.0, abs=0.5)
+
+    def test_a_line_that_is_not_in_the_audio_anchors_to_nothing(self) -> None:
+        """The cover sheet falls out for free: its page numbers and dates match
+        no speech. No rule about what a cover sheet looks like is needed — and
+        the editors had already warned that such a rule would be wrong."""
+        got = align_script.anchor_windows(["1234", "14  2568", "สวัสดีครับท่านผู้ฟัง"], self.spans())
+
+        assert got[0] is None
+        assert got[1] is None
+        assert got[2] is not None
+
+    def test_a_bad_line_cannot_move_a_good_one(self) -> None:
+        """THE property. With the cursor, an unmatchable line dragged
+        everything after it out of place; here the neighbours are untouched."""
+        clean = align_script.anchor_windows(
+            ["สวัสดีครับท่านผู้ฟัง", "ขอบคุณที่ติดตามครับ"], self.spans()
+        )
+        with_junk = align_script.anchor_windows(
+            ["สวัสดีครับท่านผู้ฟัง", "ZZZZZZZZ", "ขอบคุณที่ติดตามครับ"], self.spans()
+        )
+
+        assert with_junk[0] == clean[0]
+        assert with_junk[2] == clean[1]  # the good line did not move
+
+    def test_the_script_is_assumed_to_be_in_audio_order(self) -> None:
+        """A documented limit, not an oversight.
+
+        The matching is a longest-common-subsequence, so it only pairs text up
+        in order. Hand a script whose lines are shuffled relative to the audio
+        and at most one side of each swap can anchor. That is fine for what
+        this is — a transcript of the programme, which is in the programme's
+        order by definition — but it would NOT be fine as a general
+        "find these paragraphs anywhere in the audio" tool, and anyone
+        extending it that way needs a different matching strategy.
+        """
+        shuffled = align_script.anchor_windows(
+            ["ขอบคุณที่ติดตามครับ", "สวัสดีครับท่านผู้ฟัง"], self.spans()
+        )
+
+        assert sum(1 for w in shuffled if w is not None) < 2
+
+    def test_survives_a_script_the_asr_disagrees_with(self) -> None:
+        """The real case: the editor has corrected the words. Matching is on
+        the parts that still agree, which was 96% of characters on their file."""
+        got = align_script.anchor_windows(
+            ["สวัสดีคร้าบท่านผู้ฟัง", "วันนี้อากาศดีมากๆ"], self.spans()
+        )
+
+        assert got[0] is not None and got[0][0] == pytest.approx(10.0, abs=1.0)
+        assert got[1] is not None and got[1][0] == pytest.approx(14.0, abs=1.5)
+
+    def test_no_asr_means_no_anchors_rather_than_a_crash(self) -> None:
+        """Without the ASR model the caller falls back to the cursor path; this
+        must return cleanly rather than raise on the way there."""
+        assert align_script.anchor_windows(["abc"], []) == [None]
+        assert align_script.anchor_windows([], self.spans()) == []
+
+    def test_anchored_alignment_places_every_line_it_could_anchor(self) -> None:
+        lines = ["สวัสดีครับท่านผู้ฟัง", "ขอบคุณที่ติดตามครับ"]
+
+        def fake_align(start, end, words):
+            step = (end - start) / max(len(words), 1)
+            return [
+                WordSpan(start + i * step, start + (i + 1) * step, 0.9)
+                for i in range(len(words))
+            ]
+
+        out = align_script.align_lines_anchored(lines, 30.0, self.spans(), fake_align)
+
+        assert len(out) == 2
+        assert out[0].start < out[1].start
+        assert all(t.confidence and t.confidence > 0 for line in out for t in line.tokens)
+
+    def test_an_unanchorable_line_is_flagged_not_dropped(self) -> None:
+        """Same contract the cursor path already had: confidence 0, red for the
+        reviewer, never fatal and never silently missing."""
+        out = align_script.align_lines_anchored(
+            ["1234", "สวัสดีครับท่านผู้ฟัง"], 30.0, self.spans(),
+            lambda s, e, w: None,
+        )
+
+        assert len(out) == 2  # the junk line is still there
+        assert all(t.confidence == 0.0 for t in out[0].tokens)

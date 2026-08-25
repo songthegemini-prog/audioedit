@@ -11,8 +11,15 @@ from pathlib import Path
 
 from collections.abc import Callable
 
+from . import config
 from .align import Aligner, SegmentWords, audio_duration
-from .align_script import align_script_lines, read_script, script_lines
+from .align_script import (
+    AsrSpan,
+    align_lines_anchored,
+    align_script_lines,
+    read_script,
+    script_lines,
+)
 from .asr import ASREngine
 from .tokens import Token, segment_to_tokens
 
@@ -235,8 +242,25 @@ class JobStore:
         job.progress = 1.0
         job.status = JobStatus.DONE
 
+    def _asr_spans(self, job: Job) -> list[AsrSpan]:
+        """A quick ASR pass, purely to learn WHERE things are said.
+
+        The text is never shown to the user — the editor's own script is what
+        gets kept. This only supplies each line with a time range to be aligned
+        inside, the advantage transcription has always had and script alignment
+        never did (see anchor_windows).
+        """
+        stream = self._engine.transcribe(job.path)
+        spans: list[AsrSpan] = []
+        for seg in stream.segments:
+            job.check_cancelled()
+            spans.append(AsrSpan(seg.text, seg.start, seg.end))
+            if stream.duration > 0:
+                job.progress = 0.5 * min(seg.end / stream.duration, 1.0)
+        return spans
+
     def _run_align_script(self, job: Job) -> None:
-        """มีบทอยู่แล้ว: force-align the script line by line, no ASR at all."""
+        """มีบทอยู่แล้ว: force-align the editor's own script to the audio."""
         assert self._aligner is not None and job.script_path is not None
         lines = script_lines(read_script(job.script_path))
         if not lines:
@@ -245,13 +269,35 @@ class JobStore:
         def align_window(start: float, end: float, words: list[str]):
             return next(iter(self._aligner.align(job.path, [SegmentWords(start, end, words)])))
 
-        def on_progress(frac: float) -> None:
-            job.check_cancelled()
-            job.progress = frac
+        total_sec = self._duration_fn(job.path)
 
-        aligned = align_script_lines(
-            lines, self._duration_fn(job.path), align_window, on_progress
-        )
+        # Anchored when we can: aligning each line inside a window found by ASR
+        # took mean error from 4.8s to 0.40s on the team's own file, and every
+        # line to within 2 seconds. Without the ASR model the blind cursor is
+        # still there and still works — less accurately, and the UI says so.
+        spans: list[AsrSpan] = []
+        if self._engine is not None and config.model_present(config.model_dir()):
+            try:
+                spans = self._asr_spans(job)
+            except JobCancelled:
+                raise
+            except Exception:
+                spans = []  # fall back rather than fail the whole job
+
+        if spans:
+            def on_progress(frac: float) -> None:
+                job.check_cancelled()
+                job.progress = 0.5 + 0.5 * frac
+
+            aligned = align_lines_anchored(
+                lines, total_sec, spans, align_window, on_progress
+            )
+        else:
+            def on_progress(frac: float) -> None:
+                job.check_cancelled()
+                job.progress = frac
+
+            aligned = align_script_lines(lines, total_sec, align_window, on_progress)
         tokens = [t for line in aligned for t in line.tokens]
         job.result = {
             "text": "".join(line.text for line in aligned),

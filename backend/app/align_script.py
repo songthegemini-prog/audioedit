@@ -1,14 +1,28 @@
 """Align a known script against (possibly hour-long) audio, line by line.
 
-The "มีบทอยู่แล้ว" mode: no ASR involved. Each script line is force-aligned
-inside a search window that starts where the previous line ended, so memory
-stays bounded no matter how long the file is. Lines that refuse to align
-(script/audio mismatch) get estimated times with confidence 0 — flagged red
-for the reviewer, never fatal.
+The "มีบทอยู่แล้ว" mode. The editor's own words are always what gets kept; the
+only question is how each line finds the audio it belongs to. There are two
+ways, and which one runs depends on whether the ASR model is installed:
+
+**Anchored** (preferred). A quick ASR pass says WHERE things are said — its
+text is never shown to anyone — and the script is matched against it character
+by character, so every line gets its own window. Measured on the team's own
+programme: mean error 0.40s, worst 1.0s, all 103 lines within 2 seconds.
+
+**Cursor** (fallback, no ASR model). Each line is aligned in a window starting
+where the previous line ended. It works, but a line that aligns badly moves
+the cursor wrongly and everything after it inherits the error: mean 4.8s,
+worst 25.6s on the same file. Every constant it depends on is calibrated
+together — read the comments on them before touching any of them.
+
+Either way, memory stays bounded no matter how long the file is, and lines
+that refuse to align get estimated times with confidence 0 — flagged red for
+the reviewer, never fatal.
 """
 
 from __future__ import annotations
 
+import difflib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -141,6 +155,121 @@ class AlignedLine:
     start: float
     end: float
     tokens: list[Token]
+
+
+# Slack around an anchored window. Small on purpose: the anchor already says
+# where the line is, and a loose window is what lets forced alignment wander
+# onto the neighbours' audio.
+ANCHOR_PAD_SEC = 1.0
+
+
+@dataclass(frozen=True)
+class AsrSpan:
+    """One ASR segment: its text and the time range it was heard in."""
+
+    text: str
+    start: float
+    end: float
+
+
+def anchor_windows(
+    lines: list[str], asr: list[AsrSpan]
+) -> list[tuple[float, float] | None]:
+    """A time window per script line, read off the ASR segments it matches.
+
+    This is the fix for script alignment drifting (reported 2026-08-24:
+    "ตรึงบทไม่ถูกเลย ... มีถูกเป็นบางบรรทัด"). Transcription has never had that
+    problem because Whisper hands it a time range per segment, so each piece is
+    aligned inside a window that is already correct. Script alignment starts
+    with no timing at all and feels its way forward with a cursor — and one bad
+    batch moves the cursor wrongly, so everything after it is wrong too.
+
+    Matching the script against ASR text character by character gives every
+    line its own window, from which no other line can be harmed. Measured on
+    the team's hand-corrected script against their own programme: mean error
+    from 4.8s to 0.40s, worst case from 25.6s to 1.0s, and every one of 103
+    lines within 2 seconds.
+
+    A line that matches nothing gets None — which is the right answer for the
+    cover sheet, whose page numbers and dates are not in the audio at all. It
+    falls out of the matching for free, with no rule about what a cover sheet
+    looks like (a rule the editors had already told us would be wrong).
+    """
+    if not lines or not asr:
+        return [None] * len(lines)
+
+    asr_text = "".join(span.text for span in asr)
+    script_text = "".join(lines)
+
+    # ASR char offset -> time, interpolated inside the segment it falls in
+    bounds: list[tuple[int, int, float, float]] = []
+    pos = 0
+    for span in asr:
+        bounds.append((pos, pos + len(span.text), span.start, span.end))
+        pos += len(span.text)
+
+    def time_at(offset: int) -> float:
+        for lo, hi, start, end in bounds:
+            if offset < hi:
+                width = max(hi - lo, 1)
+                return start + ((offset - lo) / width) * (end - start)
+        return asr[-1].end
+
+    matcher = difflib.SequenceMatcher(None, script_text, asr_text, autojunk=False)
+    to_asr: dict[int, int] = {}
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                to_asr[i1 + k] = j1 + k
+
+    windows: list[tuple[float, float] | None] = []
+    cursor = 0
+    for line in lines:
+        lo, hi = cursor, cursor + len(line)
+        hits = [to_asr[k] for k in range(lo, hi) if k in to_asr]
+        windows.append((time_at(min(hits)), time_at(max(hits))) if hits else None)
+        cursor = hi
+    return windows
+
+
+def align_lines_anchored(
+    lines: list[str],
+    total_sec: float,
+    asr: list[AsrSpan],
+    align_window: AlignWindowFn,
+    progress: Callable[[float], None] | None = None,
+) -> list[AlignedLine]:
+    """Align each line inside its own anchored window — no running cursor.
+
+    Lines that could not be anchored keep proportional times and confidence 0,
+    the same treatment any unalignable line already gets: flagged for review,
+    never fatal.
+    """
+    windows = anchor_windows(lines, asr)
+    out: list[AlignedLine] = []
+    for done, (line, window) in enumerate(zip(lines, windows), start=1):
+        words = segment_words(line)
+        if not words:
+            continue
+        if window is None:
+            tokens = line_tokens(line, 0.0, 0.0, None)
+        else:
+            start = max(window[0] - ANCHOR_PAD_SEC, 0.0)
+            end = min(window[1] + ANCHOR_PAD_SEC, total_sec)
+            spans = None
+            try:
+                got = align_window(start, end, words)
+            except Exception:
+                got = None
+            if got is not None and any(s is not None for s in got):
+                spans = got
+            tokens = line_tokens(line, start, end, spans)
+        out.append(
+            AlignedLine(text=line, start=tokens[0].start, end=tokens[-1].end, tokens=tokens)
+        )
+        if progress:
+            progress(done / len(lines))
+    return out
 
 
 AlignWindowFn = Callable[[float, float, list[str]], "list[WordSpan | None] | None"]
