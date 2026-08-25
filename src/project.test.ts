@@ -538,3 +538,55 @@ describe("tokensInSpan — which words a waveform drag lights up", () => {
     expect(project().tokensInSpan(0, 4)).toEqual([0, 3]);
   });
 })
+
+describe("editing text never moves the audio (asked 2026-08-24)", () => {
+  /** The editor needs to know they can fix spelling all day without disturbing
+   * alignment. Per-word edits are stored beside the token, never on it. */
+  const project = () =>
+    new Project("/a.wav", {
+      text: "หนึ่งสองสาม",
+      segments: [{ text: "หนึ่งสองสาม", start: 0, end: 3 }],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 0.9 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 0.9 },
+        { text: "สาม", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 0.9 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+
+  const times = (p: Project) =>
+    p.transcription.tokens.map((t) => [t.start, t.end, t.confidence]);
+
+  it("correcting a word leaves every token's time untouched", () => {
+    const p = project();
+    const before = times(p);
+
+    p.setEditedText(1, "สองสอง");
+
+    expect(times(p)).toEqual(before);
+    expect(p.effectiveText(1)).toBe("สองสอง");
+  });
+
+  it("striking a word out leaves every token's time untouched", () => {
+    const p = project();
+    const before = times(p);
+
+    p.toggleExclude(1);
+
+    expect(times(p)).toEqual(before);
+  });
+
+  it("a cut is reversible and restores the words it struck out", () => {
+    // The safety net when alignment turns out to be wrong: the source audio is
+    // never modified, so taking a cut back is complete.
+    const p = project();
+    p.addCut({ start: 0.9, end: 2.1, tokenRange: [1, 1] });
+    expect(p.isTokenCut(1)).toBe(true);
+
+    p.removeCut(0);
+
+    expect(p.isTokenCut(1)).toBe(false);
+    expect(times(p)).toEqual(times(project()));
+  });
+})
