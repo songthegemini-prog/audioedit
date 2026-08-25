@@ -377,11 +377,21 @@ export async function realign(
   text: string,
   start: number,
   end: number,
+  /** Widen where the aligner may look — only when the retyped text grew, and
+   * only as far as the neighbouring segments. See RealignRequest in main.py. */
+  search?: { start: number; end: number },
 ): Promise<RealignResponse> {
   const res = await fetch(`${apiBase()}/realign`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, text, start, end }),
+    body: JSON.stringify({
+      path,
+      text,
+      start,
+      end,
+      search_start: search?.start,
+      search_end: search?.end,
+    }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail;

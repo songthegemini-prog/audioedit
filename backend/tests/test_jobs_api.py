@@ -375,42 +375,82 @@ def test_failed_alignment_falls_back_to_rough(tmp_path: Path) -> None:
     assert result["tokens"][0]["start"] == 0.0  # rough times kept
 
 
-def test_realign_works_without_the_alignment_model(tmp_path, monkeypatch) -> None:
+class RecordingAligner:
+    """Remembers the range it was asked to search, then declines to align."""
+
+    def __init__(self) -> None:
+        self.asked: tuple[float, float] | None = None
+
+    def align(self, audio_path: Path, segments: list[SegmentWords]):
+        self.asked = (segments[0].start, segments[0].end)
+        raise FileNotFoundError("alignment model not found")
+
+
+def test_realign_works_without_the_alignment_model(tmp_path) -> None:
     """แก้ทั้งวรรค must not need the models.
 
     The editors who retype a paragraph are exactly the ones without them: the
     machine that owns the models produces the transcript and hands the project
-    on, and from there the editor still has to be able to fix both the audio
-    and the words (2026-08-24). What the endpoint genuinely needs is Thai word
-    segmentation, which ships in the sidecar on every machine — the model only
-    refines the times.
+    on, and from there the editor still has to fix both the audio and the words
+    (2026-08-24). What the endpoint genuinely needs is Thai word segmentation,
+    which ships in the sidecar everywhere — the model only refines the times.
     """
-    from fastapi.testclient import TestClient
-
-    from app import main as app_main
-
     audio = tmp_path / "a.wav"
-    audio.write_bytes(b"RIFF")  # only its existence is checked
+    audio.write_bytes(b"RIFF")
+    client = make_client(FailingAligner())
 
-    class NoModelAligner:
-        def align(self, path, segments):
-            raise FileNotFoundError("alignment model not found")
-
-    app_main.app.dependency_overrides[app_main.get_aligner] = lambda: NoModelAligner()
-    try:
-        client = TestClient(app_main.app)
-        res = client.post(
-            "/realign",
-            json={"path": str(audio), "text": "สวัสดีครับ", "start": 1.0, "end": 3.0},
-        )
-    finally:
-        app_main.app.dependency_overrides.pop(app_main.get_aligner, None)
+    res = client.post(
+        "/realign",
+        json={"path": str(audio), "text": "สวัสดีครับ", "start": 1.0, "end": 3.0},
+    )
 
     assert res.status_code == 200, res.text
     body = res.json()
-    # The words come back, spread across the segment's own range...
-    assert body["tokens"]
+    assert body["tokens"]                       # the words come back...
     assert body["start"] >= 1.0 and body["end"] <= 3.0
-    # ...flagged as estimates, so the UI can warn and the reviewer sees red.
-    assert body["aligned"] is False
+    assert body["aligned"] is False             # ...flagged as estimates
     assert all(t["confidence"] == 0.0 for t in body["tokens"])
+
+
+def test_realign_searches_only_the_segment_by_default(tmp_path) -> None:
+    """A window barely wider than its own words is what keeps forced alignment
+    honest: measured, a blanket +/-15s window took mean error on UNCHANGED text
+    from 26ms to 922ms. The default has to stay tight."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    aligner = RecordingAligner()
+    client = make_client(aligner)
+
+    client.post(
+        "/realign",
+        json={"path": str(audio), "text": "สวัสดีครับ", "start": 10.0, "end": 12.0},
+    )
+
+    assert aligner.asked == (10.0, 12.0)
+
+
+def test_realign_can_be_told_to_look_wider(tmp_path) -> None:
+    """The case that needs it: a script built from an incomplete transcription
+    ends each line early, so the audio for the words the editor types back in
+    sits OUTSIDE the segment and they bunch against its boundary (reported
+    2026-08-25). Measured on the team's own file, 10 added words went from
+    1.63s at confidence 0.07 to 3.43s at 0.82 once the window reached it."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    aligner = RecordingAligner()
+    client = make_client(aligner)
+
+    res = client.post(
+        "/realign",
+        json={
+            "path": str(audio),
+            "text": "สวัสดีครับ",
+            "start": 10.0,
+            "end": 12.0,
+            "search_start": 9.5,
+            "search_end": 16.0,
+        },
+    )
+
+    assert res.status_code == 200
+    assert aligner.asked == (9.5, 16.0)

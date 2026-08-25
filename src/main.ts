@@ -196,6 +196,43 @@ function setup(): void {
   searchNext.addEventListener("click", () => gotoMatch(1));
   searchPrev.addEventListener("click", () => gotoMatch(-1));
 
+  /** Where the aligner may look for a retyped paragraph.
+   *
+   * Normally: nowhere but the segment itself. A window barely wider than its
+   * words is what keeps forced alignment honest — measured, a blanket +/-15s
+   * took mean error on unchanged text from 26ms to 922ms.
+   *
+   * The exception is text that GREW. A script built from an incomplete
+   * transcription ends each line early, so the segment ends early and the
+   * audio for the missing words lies outside it; typing them back in leaves
+   * them nowhere to go and they bunch against the boundary (reported
+   * 2026-08-25). Then the window needs to reach that audio — sized from how
+   * much text was added, at this segment's own observed reading speed, and
+   * never past the neighbours, whose audio belongs to them.
+   */
+  const searchWindowFor = (
+    proj: Project,
+    segIndex: number,
+    newText: string,
+  ): { start: number; end: number } | undefined => {
+    const segs = proj.transcription.segments;
+    const seg = segs[segIndex];
+    const oldLen = proj.segmentEffectiveText(segIndex).length;
+    const grew = newText.length - oldLen;
+    if (oldLen === 0 || grew <= 0) return undefined;
+
+    const duration = seg.end - seg.start;
+    if (duration <= 0) return undefined;
+    // This segment's own seconds-per-character, so no speech rate is guessed.
+    const extra = (duration / oldLen) * grew * 1.3; // margin for a slower tail
+    const limitEnd = segIndex + 1 < segs.length ? segs[segIndex + 1].start : player.duration;
+    const limitStart = segIndex > 0 ? segs[segIndex - 1].end : 0;
+    return {
+      start: Math.max(seg.start - extra * 0.2, limitStart),
+      end: Math.min(seg.end + extra, limitEnd),
+    };
+  };
+
   const transcript = new TranscriptView(transcriptEl, {
     onEditText: (i, text) => {
       project?.setEditedText(i, text);
@@ -210,7 +247,13 @@ function setup(): void {
       const proj = project; // guard against a file switch during the await
       const seg = project.transcription.segments[segIndex];
       try {
-        const res = await realign(currentPath, text, seg.start, seg.end);
+        const res = await realign(
+          currentPath,
+          text,
+          seg.start,
+          seg.end,
+          searchWindowFor(project, segIndex, text),
+        );
         // if the user opened another file / งานใหม่ mid-realign, this result
         // belongs to the old project — drop it (Codex review #4)
         if (project !== proj) return;

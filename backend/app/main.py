@@ -275,6 +275,23 @@ class RealignRequest(BaseModel):
     text: str
     start: float
     end: float
+    # Where the aligner may LOOK, when that has to be wider than the segment.
+    #
+    # A script built from an incomplete transcription ends each line early, so
+    # the segment ends early too and the audio for the missing words sits
+    # OUTSIDE it. Typing those words back in then gives them nowhere to go and
+    # they pile up against the closing boundary — reported 2026-08-25,
+    # "ตัวเทคด้านหลังที่เติมเข้าไปมองเป็นก้อนเดียว". Measured on the team's own
+    # file: 10 added words squeezed into 1.63s at confidence 0.07, and the same
+    # words across 3.43s at 0.82 once the window could reach the audio.
+    #
+    # The caller sends this ONLY when the text grew, and sizes it from the
+    # words actually added. Widening by default is not an option: the same
+    # measurement with a blanket +/-15s window took mean error on UNCHANGED
+    # text from 26ms to 922ms — a loose window lets alignment wander, which is
+    # the whole lesson of FIXES.md #62.
+    search_start: float | None = None
+    search_end: float | None = None
 
 
 @app.post("/realign")
@@ -321,7 +338,9 @@ def realign(req: RealignRequest, aligner: CTCAligner = Depends(get_aligner)) -> 
     spans = None
     aligned = False
     try:
-        got = next(iter(aligner.align(path, [SegmentWords(req.start, req.end, words)])))
+        look_start = req.search_start if req.search_start is not None else req.start
+        look_end = req.search_end if req.search_end is not None else req.end
+        got = next(iter(aligner.align(path, [SegmentWords(look_start, look_end, words)])))
         if any(s is not None for s in got):
             spans = got
             aligned = True
