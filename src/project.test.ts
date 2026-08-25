@@ -228,8 +228,17 @@ describe("Project.replaceSegment (index remapping)", () => {
     p.replaceSegment(0, "หวัดดีจ้า", newTokens); // 2 tokens -> 3 (delta +1)
 
     expect(p.canUndo).toBe(true); // history survived
+    // The pencil edit is now a step of its own, so the FIRST undo takes back
+    // the re-align and the second takes back the cut.
     expect(p.undo()).toBe(true);
-    expect(p.edl).toHaveLength(0); // and it really undid the cut
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual([
+      "สวัสดี",
+      "ครับ",
+      "วันนี้",
+      "ร้อน",
+    ]);
+    expect(p.undo()).toBe(true);
+    expect(p.edl).toHaveLength(0); // and the cut really did come back off
     expect(p.canRedo).toBe(true);
   });
 
@@ -248,12 +257,20 @@ describe("Project.replaceSegment (index remapping)", () => {
       [4, 4],
     ]);
 
-    // Undo removes the most recent cut ("วันนี้", now index 3) and the one
-    // left behind must still be the shifted "ร้อน" — not the stale index 3.
+    // First undo takes back the re-align itself (its own step now), so the
+    // indices return to their pre-splice values.
+    p.undo();
+    expect(p.edl.map((c) => c.tokenRange)).toEqual([
+      [2, 2],
+      [3, 3],
+    ]);
+
+    // The next undo removes the most recent cut ("วันนี้") and the one left
+    // behind must still be the right word.
     p.undo();
     expect(p.edl).toHaveLength(1);
-    expect(p.edl[0].tokenRange).toEqual([4, 4]);
-    expect(p.effectiveText(4)).toBe("ร้อน"); // the word it claims to cut
+    expect(p.edl[0].tokenRange).toEqual([3, 3]);
+    expect(p.effectiveText(3)).toBe("ร้อน"); // the word it claims to cut
   });
 
   it("a cut overlapping the replaced segment stays a time-only cut through undo", () => {
@@ -262,13 +279,24 @@ describe("Project.replaceSegment (index remapping)", () => {
     p.addCut({ start: 0.2, end: 0.9, tokenRange: [0, 0] }); // segment 1, doomed
     p.replaceSegment(0, "หวัดดีจ้า", newTokens);
 
-    // Undo drops the overlapping cut; the snapshot it restores must carry the
-    // SHIFTED index for the surviving one, or the .docx would omit the wrong
-    // word after an undo.
+    // Live EDL after the splice: the overlapping cut lost its range, the
+    // other shifted by +1.
+    expect(p.edl.map((c) => c.tokenRange)).toEqual([null, [4, 4]]);
+
+    // The FIRST undo takes back the re-align itself, so the token list — and
+    // with it both cuts — return to exactly what they were before it.
+    p.undo();
+    expect(p.edl.map((c) => c.tokenRange)).toEqual([
+      [0, 0],
+      [3, 3],
+    ]);
+    expect(p.edl.map((c) => c.start)).toEqual([0.2, 3.0]); // times never move
+
+    // The next undo removes the cut that was made last.
     p.undo();
     expect(p.edl).toHaveLength(1);
-    expect(p.edl[0].tokenRange).toEqual([4, 4]);
-    expect(p.edl[0].start).toBe(3.0); // times never move
+    expect(p.edl[0].tokenRange).toEqual([3, 3]);
+    expect(p.effectiveText(3)).toBe("ร้อน"); // still the word it claims to cut
   });
 });
 
@@ -802,5 +830,90 @@ describe("what a re-transcribe or re-align does to corrections (asked 2026-08-24
 
     expect(after.editCount).toBe(0);
     expect(after.effectiveText(0)).toBe("หนึ่ง");
+  });
+})
+
+describe("แก้ทั้งวรรค (the ✎ pencil) can be undone (asked 2026-08-24)", () => {
+  /** It rewrites the token list, which the history did not carry — so it
+   * recorded no step at all and was the one edit with no way back. */
+  const project = () =>
+    new Project("/a.wav", {
+      text: "หนึ่งสองสาม",
+      segments: [
+        { text: "หนึ่งสอง", start: 0, end: 2 },
+        { text: "สาม", start: 2, end: 3 },
+      ],
+      tokens: [
+        { text: "หนึ่ง", start: 0, end: 1, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สอง", start: 1, end: 2, isFiller: false, docCharRange: null, confidence: 1 },
+        { text: "สาม", start: 2, end: 3, isFiller: false, docCharRange: null, confidence: 1 },
+      ],
+      timestamps: "aligned",
+      alignError: null,
+    });
+
+  const newTokens = () => [
+    { text: "ก", start: 0, end: 0.7, isFiller: false, docCharRange: null, confidence: 0.9 },
+    { text: "ข", start: 0.7, end: 1.4, isFiller: false, docCharRange: null, confidence: 0.9 },
+    { text: "ค", start: 1.4, end: 2, isFiller: false, docCharRange: null, confidence: 0.9 },
+  ];
+
+  it("restores the words the pencil replaced", () => {
+    const p = project();
+    p.replaceSegment(0, "กขค", newTokens());
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual(["ก", "ข", "ค", "สาม"]);
+
+    expect(p.undo()).toBe(true);
+
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual(["หนึ่ง", "สอง", "สาม"]);
+    expect(p.transcription.segments[0].text).toBe("หนึ่งสอง");
+  });
+
+  it("redo puts the retyped segment back", () => {
+    const p = project();
+    p.replaceSegment(0, "กขค", newTokens());
+    p.undo();
+
+    p.redo();
+
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual(["ก", "ข", "ค", "สาม"]);
+  });
+
+  it("brings back the word edits the pencil dropped", () => {
+    // Edits inside the replaced span are discarded on purpose — the text was
+    // retyped — but undo has to return them, or the pencil is still a one-way
+    // door for everything in that segment.
+    const p = project();
+    p.setEditedText(1, "แก้ไว้");
+    p.replaceSegment(0, "กขค", newTokens());
+    expect(p.isEdited(1)).toBe(false);
+
+    p.undo();
+
+    expect(p.effectiveText(1)).toBe("แก้ไว้");
+  });
+
+  it("restores a cut's token range, not just its time", () => {
+    const p = project();
+    p.addCut({ start: 0.9, end: 2.1, tokenRange: [1, 1] });
+    p.replaceSegment(0, "กขค", newTokens());
+    expect(p.edl[0].tokenRange).toBeNull(); // the range no longer means anything
+
+    p.undo();
+
+    expect(p.edl[0].tokenRange).toEqual([1, 1]);
+  });
+
+  it("an ordinary edit after a pencil edit still undoes one step at a time", () => {
+    const p = project();
+    p.replaceSegment(0, "กขค", newTokens());
+    p.setEditedText(3, "สามสาม");
+
+    p.undo(); // the word edit only
+    expect(p.effectiveText(3)).toBe("สาม");
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual(["ก", "ข", "ค", "สาม"]);
+
+    p.undo(); // now the pencil edit
+    expect(p.transcription.tokens.map((t) => t.text)).toEqual(["หนึ่ง", "สอง", "สาม"]);
   });
 })

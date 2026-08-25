@@ -66,6 +66,14 @@ export interface ProjectFileV2 {
 interface HistoryState {
   edl: Cut[];
   edits: Map<number, TokenEdit>;
+  /** Present only for a step that rewrites the token list (แก้ทั้งวรรค).
+   *
+   * Kept optional so the common steps — a cut, a corrected word — stay cheap:
+   * an hour-long file has tens of thousands of tokens and copying them into
+   * every history entry would cost megabytes per press.
+   */
+  tokens?: Token[];
+  segments?: TranscribeResult["segments"];
 }
 
 /** A transcription plus the user's edits; serializable to <name>.audioedit.json. */
@@ -149,7 +157,9 @@ export class Project {
   undo(): boolean {
     const prev = this.undoStack.pop();
     if (!prev) return false;
-    this.redoStack.push(this.snapshot());
+    // If the step being undone rewrote the tokens, the state we are leaving
+    // has to record them too — otherwise redo could not get back to it.
+    this.redoStack.push(this.snapshot(prev.tokens !== undefined));
     this.restore(prev);
     this.dirty = true;
     return true;
@@ -158,7 +168,7 @@ export class Project {
   redo(): boolean {
     const next = this.redoStack.pop();
     if (!next) return false;
-    this.undoStack.push(this.snapshot());
+    this.undoStack.push(this.snapshot(next.tokens !== undefined));
     this.restore(next);
     this.dirty = true;
     return true;
@@ -184,16 +194,34 @@ export class Project {
     this.redoStack = [];
   }
 
-  private snapshot(): HistoryState {
-    return {
+  private snapshot(withTokens = false): HistoryState {
+    const state: HistoryState = {
       edl: this.edlList.map((c) => ({ ...c })),
       edits: new Map([...this.edits].map(([i, e]) => [i, { ...e }])),
     };
+    if (withTokens) {
+      // Shallow for the tokens (they are replaced wholesale, never mutated in
+      // place) but a real copy of the segments, whose text/start/end ARE
+      // mutated by replaceSegment.
+      state.tokens = [...this.transcription.tokens];
+      state.segments = this.transcription.segments.map((seg) => ({ ...seg }));
+    }
+    return state;
   }
 
   private restore(state: HistoryState): void {
     this.edlList = state.edl;
     this.edits = state.edits;
+    if (state.tokens && state.segments) {
+      // splice, not reassign: `transcription` is readonly and other views hold
+      // a reference to these very arrays.
+      this.transcription.tokens.splice(0, this.transcription.tokens.length, ...state.tokens);
+      this.transcription.segments.splice(
+        0,
+        this.transcription.segments.length,
+        ...state.segments,
+      );
+    }
   }
 
   /** Run a bulk change as ONE undo step.
@@ -324,6 +352,13 @@ export class Project {
    * - the SAME remapping is applied to every undo/redo snapshot, so the
    *   history survives (see below) */
   replaceSegment(segIndex: number, newText: string, newTokens: Token[]): void {
+    // แก้ทั้งวรรค used to be the one edit with no way back: it rewrites the
+    // token list, which the history did not carry, so it recorded nothing at
+    // all. Capture the tokens with this step so it can be undone like the rest.
+    if (!this.batching) {
+      this.undoStack.push(this.snapshot(true));
+      this.redoStack = [];
+    }
     const [first, endEx] = this.segmentTokenRange(segIndex);
     const delta = newTokens.length - (endEx - first);
     this.transcription.tokens.splice(first, endEx - first, ...newTokens);
@@ -354,30 +389,19 @@ export class Project {
       });
 
     this.edlList = shiftCuts(this.edlList);
-    // The history used to be thrown away here, on the grounds that its
-    // snapshots hold token indices that this splice just invalidated. True —
-    // but the cure was worse: the editor cuts a few things, fixes a wording
-    // with ✎, and the undo button goes dead with no explanation. Reported
-    // 2026-08-24 as "ปุ่มย้อนกลับก็กดไม่ได้", which is exactly what it
-    // looks like from the outside.
+    // The history is NOT remapped, and that is deliberate.
     //
-    // Remapping the snapshots the same way the live EDL is remapped keeps
-    // them consistent instead. Cut TIMES are never touched by a re-align, so
-    // an undone snapshot still describes the same audio; a range that
-    // overlapped the replaced segment becomes null there too, and null ranges
-    // already fall back to a time comparison (isTokenRemoved).
-    // The edit indices in a snapshot shift exactly the way the live ones did.
-    const shiftState = (state: HistoryState): HistoryState => {
-      const moved = new Map<number, TokenEdit>();
-      for (const [i, edit] of state.edits) {
-        if (i < first) moved.set(i, edit);
-        else if (i >= endEx) moved.set(i + delta, edit);
-        // edits inside the replaced span are dropped, same as the live ones
-      }
-      return { edl: shiftCuts(state.edl), edits: moved };
-    };
-    this.undoStack = this.undoStack.map(shiftState);
-    this.redoStack = this.redoStack.map(shiftState);
+    // It used to be thrown away here, on the grounds that its snapshots hold
+    // token indices this splice invalidates — which left the undo button dead
+    // after any ✎ edit (FIXES.md #54). Remapping them was the first fix, and
+    // it was right only while แก้ทั้งวรรค recorded no step of its own.
+    //
+    // Now it does, carrying the token list with it. Undo is last-in-first-out,
+    // so reaching any older snapshot means passing through that one first,
+    // which puts the pre-splice token list back. Every older snapshot is
+    // therefore applied to the world it was taken in, and its indices are
+    // already correct. Shifting them as well would leave each one pointing a
+    // word off (caught by "remaps the snapshots too" in the tests).
     this.dirty = true;
   }
 
