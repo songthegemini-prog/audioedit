@@ -217,6 +217,32 @@ def test_align_script_job_skips_asr_entirely(tmp_path: Path) -> None:
     assert [t["text"] for t in result["tokens"]][:2] == ["สวัสดี", "ครับ"]
 
 
+def test_a_script_can_be_brought_in_without_the_alignment_model(tmp_path: Path) -> None:
+    """The editor's machine has no models — it is handed the project — and
+    bringing the script in is the first thing they do (2026-08-25). The words
+    must arrive; only the TIMES are allowed to degrade."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"fake")
+    script = tmp_path / "script.txt"
+    script.write_text("สวัสดีครับ\nวันนี้อากาศดี\n", encoding="utf-8")
+    client = make_client(aligner=FailingAligner())
+
+    res = client.post("/align_script", json={"path": str(audio), "script_path": str(script)})
+    body = wait_for_done(client, res.json()["job_id"])
+
+    assert body["status"] == "done"
+    result = body["result"]
+    assert len(result["segments"]) == 2                     # the script came in
+    assert result["segments"][0]["text"] == "สวัสดีครับ"
+    assert [t["text"] for t in result["tokens"]][:2] == ["สวัสดี", "ครับ"]
+    # ...but nothing may claim to be aligned, because cutting depends on it
+    assert result["timestamps"] == "rough"
+    assert result["alignError"]
+    assert all(t["confidence"] == 0.0 for t in result["tokens"])
+    # times still advance through the file, so words land in a sensible order
+    assert result["segments"][0]["end"] <= result["segments"][1]["start"] + 1e-6
+
+
 def test_align_script_validates_files(tmp_path: Path) -> None:
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"fake")

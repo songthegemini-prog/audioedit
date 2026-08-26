@@ -261,12 +261,26 @@ class JobStore:
 
     def _run_align_script(self, job: Job) -> None:
         """มีบทอยู่แล้ว: force-align the editor's own script to the audio."""
-        assert self._aligner is not None and job.script_path is not None
+        assert job.script_path is not None
         lines = script_lines(read_script(job.script_path))
         if not lines:
             raise ValueError("ไฟล์บทว่างเปล่า")
 
+        # Bringing a script IN must not require the models. That is the first
+        # step of the editor's day, and the editor is exactly the person who
+        # does not have them: the machine that owns the models produces the
+        # transcript and hands the project on. Without the align model the
+        # words still come in, split and placed proportionally at confidence
+        # 0 — enough to read, search, correct and write back to Word — and the
+        # UI says plainly that the times are estimates.
+        #
+        # No check for the model files here on purpose. align_script_lines
+        # already treats a failing window as "no spans for this batch", so the
+        # aligner is simply asked and allowed to fail; duplicating the "is the
+        # model installed" rule in a second place is how the two drift apart.
         def align_window(start: float, end: float, words: list[str]):
+            if self._aligner is None:
+                return None
             return next(iter(self._aligner.align(job.path, [SegmentWords(start, end, words)])))
 
         total_sec = self._duration_fn(job.path)
@@ -299,14 +313,18 @@ class JobStore:
 
             aligned = align_script_lines(lines, total_sec, align_window, on_progress)
         tokens = [t for line in aligned for t in line.tokens]
+        # "aligned" is a promise about cut accuracy, so only claim it when the
+        # model actually placed words. Every token at confidence 0 means the
+        # times are proportional estimates, and the UI must warn before a cut.
+        any_aligned = any((t.confidence or 0.0) > 0.0 for t in tokens)
         job.result = {
             "text": "".join(line.text for line in aligned),
             "segments": [
                 {"text": line.text, "start": line.start, "end": line.end} for line in aligned
             ],
             "tokens": [t.to_dict() for t in tokens],
-            "timestamps": "aligned",
-            "alignError": None,
+            "timestamps": "aligned" if any_aligned else "rough",
+            "alignError": None if any_aligned else "เครื่องนี้ไม่มีโมเดลตรึงบท — เวลาเป็นค่าประมาณ",
         }
         job.progress = 1.0
         job.status = JobStatus.DONE

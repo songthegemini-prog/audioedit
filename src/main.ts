@@ -779,7 +779,13 @@ function setup(): void {
     // never runs ASR, so it has no business demanding the 2.9GB ASR model —
     // requiring it made a machine that only ever aligns download it for
     // nothing (asked 2026-08-24).
-    alignScriptBtn.disabled = !(audioReady && alignModelReady);
+    //
+    // It does not demand the ALIGN model either. Bringing a script in is the
+    // first thing the editor does, and the editor is the person without the
+    // models — the machine that has them makes the transcript and hands the
+    // project on (2026-08-25). Without the model the words still arrive, at
+    // estimated times; the button warns first and the note says so after.
+    alignScriptBtn.disabled = !audioReady;
     const hasProject = project !== null;
     // Markers only need a loaded file — they work before transcription, and
     // without the backend (they are pure project data).
@@ -1561,8 +1567,21 @@ function setup(): void {
       filters: [{ name: "ไฟล์บท", extensions: ["txt", "docx"] }],
     });
     if (typeof scriptPath !== "string") return;
+    // Say it before the work, not after: without the model the words come in
+    // but the times are estimates, and estimates must never be cut against.
+    if (
+      !alignModelReady &&
+      !window.confirm(
+        "เครื่องนี้ไม่มีโมเดลตรึงบท\n\n" +
+          "บทจะเข้ามาครบทุกคำ แก้คำและส่งกลับไฟล์ Word ได้ตามปกติ " +
+          "แต่เวลาของแต่ละคำจะเป็นค่าประมาณ ไม่ควรใช้ตัดเสียง\n\n" +
+          "ดำเนินการต่อ?",
+      )
+    ) {
+      return;
+    }
     alignScriptBtn.disabled = true;
-    transcriptEl.textContent = "กำลังตรึงบทกับเสียง…";
+    transcriptEl.textContent = "กำลังนำบทเข้า…";
     try {
       const jobId = await startAlignScript(audioPath, scriptPath);
       trackJob(jobId, alignScriptBtn, "ตรึงบท (มีบทแล้ว)", "ตรึงบท", transcriptEl, (r) =>
