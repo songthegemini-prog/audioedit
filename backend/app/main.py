@@ -447,6 +447,46 @@ def compare_audio(req: CompareRequest) -> dict:
     return compare(measure(source, cuts or None), measure(edited))
 
 
+@app.get("/cuda/find")
+def cuda_find() -> dict:
+    """Look for the CUDA libraries already on this machine.
+
+    The add-on was never shipped — bundling it took the installer to 3.05GB
+    against a 2GB ceiling — so the panel's advice was "find these two files
+    yourself", which is not advice an editor can act on. Most machines that
+    have an NVIDIA card have them somewhere already, from the CUDA Toolkit or
+    from any PyTorch install, so look before asking.
+    """
+    from . import gpu
+
+    try:
+        found = gpu.find_add_on_source()
+    except Exception as exc:  # a broken search must not break the panel
+        return {"found": None, "error": str(exc)}
+    return {"found": str(found) if found else None, "target": str(gpu.add_on_dir())}
+
+
+class CudaInstallRequest(BaseModel):
+    """Where to copy the libraries FROM. Omitted means "search for them"."""
+
+    source: str | None = None
+
+
+@app.post("/cuda/install")
+def cuda_install(req: CudaInstallRequest) -> dict:
+    from . import gpu
+
+    source = Path(req.source).expanduser() if req.source else gpu.find_add_on_source()
+    if source is None:
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์ที่ต้องใช้ในเครื่องนี้")
+    try:
+        return gpu.install_add_on(source)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"คัดลอกไม่สำเร็จ: {exc}") from exc
+
+
 class PackProjectRequest(BaseModel):
     """Copy the source audio into a self-contained project folder.
 
@@ -458,6 +498,10 @@ class PackProjectRequest(BaseModel):
 
     audio_path: str
     out_dir: str
+    # The formatted script the project was aligned from. It goes in the folder
+    # too, because the editor's last step is writing corrections back into it —
+    # a handoff without it leaves that step impossible (asked 2026-08-26).
+    script_path: str | None = None
 
 
 @app.post("/pack_project")
@@ -484,11 +528,22 @@ def pack_project(req: PackProjectRequest) -> dict:
         raise HTTPException(status_code=400, detail="ปลายทางเป็นไฟล์ต้นฉบับเอง")
     shutil.copy2(audio, destination)
 
+    script_name = None
+    if req.script_path:
+        script = Path(req.script_path).expanduser()
+        if script.is_file():
+            script_dest = out_dir / script.name
+            # Same self-copy guard: the script is the team's formatted master.
+            if script_dest.resolve() != script.resolve():
+                shutil.copy2(script, script_dest)
+            script_name = script.name
+
     return {
         "out_dir": str(out_dir),
         "audio_name": audio.name,
         "audio_path": str(destination),
         "bytes": destination.stat().st_size,
+        "script_name": script_name,
     }
 
 

@@ -708,12 +708,21 @@ body {
 /* GPU acceleration indicator. Only shown when there is something worth
    saying: either it IS accelerating (10.4x measured), or there is a card
    sitting idle because the add-on folder has not been copied over. */
+/* A BUTTON, not a label. It always looked clickable, and an editor did click
+   it — the instructions were hidden in a hover tooltip and never seen
+   (2026-08-26). Now the click opens them, so the cursor tells the truth. */
 .gpu-info {
   flex-shrink: 0;
   font-size: 0.75rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  cursor: default;
+  cursor: pointer;
+  background: none;
+  font-family: inherit;
+}
+
+.gpu-info:hover {
+  filter: brightness(1.25);
 }
 
 .gpu-on {
@@ -724,6 +733,13 @@ body {
 .gpu-off {
   color: #c9a227;
   border: 1px solid #4a4020;
+}
+
+/* The files are in place but this process probed before they arrived. Green,
+   because nothing is wrong — only a restart is left. */
+.gpu-ready {
+  color: #3fb950;
+  border: 1px solid #2a5c33;
 }
 
 /* Keyboard shortcut reference. Scrollable and capped, because the list is

@@ -182,3 +182,95 @@ def test_finds_the_add_on_dropped_next_to_the_app_icon(tmp_path, monkeypatch) ->
 
     assert state["found"] is True
     assert state["dir"] == str(install)
+
+
+# --- finding and installing the add-on -------------------------------------
+
+
+def test_a_folder_holding_both_libraries_is_found(tmp_path, monkeypatch) -> None:
+    """Most machines with an NVIDIA card already have these somewhere. The
+    panel used to tell the editor to go and find two DLLs by name, which is
+    not something anyone can act on (reported 2026-08-26)."""
+    good = tmp_path / "cuda-toolkit" / "bin"
+    good.mkdir(parents=True)
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        (good / name).write_bytes(b"x")
+    monkeypatch.setattr(gpu, "_search_dirs", lambda: iter([tmp_path, good]))
+
+    assert gpu.find_add_on_source() == good
+
+
+def test_a_folder_with_only_one_library_is_not_a_find(tmp_path, monkeypatch) -> None:
+    # Half an add-on is the configuration that hangs — never report it as found.
+    half = tmp_path / "half"
+    half.mkdir()
+    (half / gpu.REQUIRED_CUDA_DLLS[0]).write_bytes(b"x")
+    monkeypatch.setattr(gpu, "_search_dirs", lambda: iter([half]))
+
+    assert gpu.find_add_on_source() is None
+
+
+def test_the_search_stops_at_the_first_hit(tmp_path, monkeypatch) -> None:
+    """Built eagerly the search took 13.5s even with the answer first in the
+    list — too slow to sit behind a button."""
+    good = tmp_path / "first"
+    good.mkdir()
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        (good / name).write_bytes(b"x")
+    visited: list = []
+
+    def spy():
+        for directory in (good, tmp_path / "never-reached"):
+            visited.append(directory)
+            yield directory
+
+    monkeypatch.setattr(gpu, "_search_dirs", spy)
+    gpu.find_add_on_source()
+
+    assert visited == [good]
+
+
+def test_installing_copies_both_libraries_into_the_add_on_folder(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        (source / name).write_bytes(b"payload")
+    target = tmp_path / "data" / "cuda"
+    monkeypatch.setattr(gpu, "add_on_dir", lambda: target)
+
+    result = gpu.install_add_on(source)
+
+    assert sorted(result["copied"]) == sorted(gpu.REQUIRED_CUDA_DLLS)
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        assert (target / name).read_bytes() == b"payload"
+
+
+def test_installing_from_an_incomplete_folder_is_refused(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / gpu.REQUIRED_CUDA_DLLS[0]).write_bytes(b"x")
+    monkeypatch.setattr(gpu, "add_on_dir", lambda: tmp_path / "cuda")
+
+    with pytest.raises(FileNotFoundError):
+        gpu.install_add_on(source)
+
+
+def test_status_reports_files_that_arrived_after_startup(tmp_path, monkeypatch) -> None:
+    """The confusing case, and the reason this field exists: the libraries
+    were put in place while the app was running. libraries_found is decided
+    once at startup and stays false, so the panel kept saying "not enabled"
+    with the files sitting right there and no hint that only a restart was
+    left to do."""
+    add_on = tmp_path / "cuda"
+    add_on.mkdir()
+    for name in gpu.REQUIRED_CUDA_DLLS:
+        (add_on / name).write_bytes(b"x")
+    monkeypatch.setattr(gpu, "add_on_dir", lambda: add_on)
+    monkeypatch.setattr(gpu, "_state", {"found": False, "dir": None})
+
+    body = gpu.status()
+
+    assert body["libraries_found"] is False  # this process still cannot use them
+    assert body["dlls_in_place"] is True  # ...but they ARE there now

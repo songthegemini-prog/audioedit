@@ -41,6 +41,10 @@ export interface Marker {
 export interface ProjectFileV3 {
   version: 3;
   audioPath: string;
+  /** The formatted .docx this script was aligned from, so the editor can be
+   * handed it along with the audio and write corrections straight back into
+   * it. Optional: projects saved before this existed simply have none. */
+  scriptPath?: string;
   transcription: TranscribeResult;
   edits: Record<string, TokenEdit>;
   edl: Cut[];
@@ -81,6 +85,10 @@ export class Project {
   /** Mutable: when a project moves machines, the audio is re-located next to
    * the project file and this is updated to the found path. */
   audioPath: string;
+  /** The script document this project was aligned from, when there was one.
+   * Mutable for the same reason audioPath is: packing rewrites it to a bare
+   * filename, and opening a moved project re-locates it beside the .json. */
+  scriptPath: string | null = null;
   readonly transcription: TranscribeResult;
   savePath: string | null = null;
   dirty = false;
@@ -493,6 +501,7 @@ export class Project {
     const file: ProjectFileV3 = {
       version: 3,
       audioPath: this.audioPath,
+      ...(this.scriptPath ? { scriptPath: this.scriptPath } : {}),
       transcription: this.transcription,
       edits,
       edl: this.edlList.map((c) => ({ ...c })),
@@ -511,6 +520,7 @@ export class Project {
     const file = raw as {
       version?: number;
       audioPath?: string;
+      scriptPath?: string;
       transcription?: TranscribeResult;
       edits?: Record<string, TokenEdit>;
       edl?: Cut[];
@@ -523,6 +533,7 @@ export class Project {
       throw new Error("ไฟล์โปรเจกต์ขาดข้อมูลจำเป็น (audioPath/transcription)");
     }
     const project = new Project(file.audioPath, file.transcription as TranscribeResult);
+    if (typeof file.scriptPath === "string") project.scriptPath = file.scriptPath;
     for (const [key, edit] of Object.entries(file.edits ?? {})) {
       const i = Number(key);
       if (Number.isInteger(i) && i >= 0 && i < project.transcription.tokens.length) {

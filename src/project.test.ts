@@ -917,3 +917,21 @@ describe("แก้ทั้งวรรค (the ✎ pencil) can be undone (aske
     expect(p.transcription.tokens.map((t) => t.text)).toEqual(["หนึ่ง", "สอง", "สาม"]);
   });
 })
+
+describe("the script document a project came from", () => {
+  it("is remembered across save and load", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.scriptPath = "C:\\งาน\\ใบปะหน้า.docx";
+
+    expect(Project.parse(p.serialize()).scriptPath).toBe(p.scriptPath);
+  });
+
+  it("is absent from a project that never had one", () => {
+    // Packing must not invent a script, and files saved before this
+    // existed simply have none — they must still load.
+    const saved = JSON.parse(new Project("/a.wav", makeTranscription()).serialize());
+
+    expect("scriptPath" in saved).toBe(false);
+    expect(Project.parse(JSON.stringify(saved)).scriptPath).toBeNull();
+  });
+});

@@ -1,4 +1,5 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { readFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 import {
@@ -22,6 +23,8 @@ import {
   startPrepareAudio,
   startTranscribe,
   updateDocx,
+  findCuda,
+  installCuda,
 } from "./api";
 import type {
   AudioInfo,
@@ -1037,6 +1040,17 @@ function setup(): void {
           return;
         }
       }
+      // Same sibling convention for the script: packing stored a bare
+      // filename, so resolve it against the folder the project opened from.
+      // Absolute paths from an unpacked project are left exactly as they are.
+      const bareName =
+        loaded.scriptPath !== null &&
+        !loaded.scriptPath.includes("/") &&
+        !loaded.scriptPath.includes("\\");
+      if (bareName) {
+        const sep = path.includes("\\") ? "\\" : "/";
+        loaded.scriptPath = path.slice(0, path.lastIndexOf(sep) + 1) + loaded.scriptPath;
+      }
       loaded.savePath = path;
       project = loaded;
       transcript.render(project);
@@ -1145,19 +1159,23 @@ function setup(): void {
     packBtn.disabled = true;
     fileName.textContent = "กำลังรวมไฟล์เข้าโฟลเดอร์โปรเจกต์…";
     try {
-      const packed = await packProject(proj.audioPath, target);
-      // Point the SAVED copy at the bare filename. The in-memory project
-      // keeps its original absolute path, so the editor carries on against
-      // the file they already have open.
+      const packed = await packProject(proj.audioPath, target, proj.scriptPath);
+      // Point the SAVED copy at the bare filenames. The in-memory project
+      // keeps its original absolute paths, so the editor carries on against
+      // the files they already have open.
       const originalPath = proj.audioPath;
+      const originalScript = proj.scriptPath;
       proj.audioPath = packed.audio_name;
+      if (packed.script_name) proj.scriptPath = packed.script_name;
       const json = proj.serialize();
       proj.audioPath = originalPath;
+      proj.scriptPath = originalScript;
       await writeTextFile(`${packed.out_dir}/${base}.audioedit.json`, json);
       const mb = (packed.bytes / 1024 ** 2).toFixed(0);
+      const withScript = packed.script_name ? ` + บท ${packed.script_name}` : "";
       fileName.textContent =
         `✅ รวมเป็นโปรเจกต์แล้ว: ${packed.out_dir} ` +
-        `(เสียง ${packed.audio_name} ${mb} MB + ไฟล์งาน) — ย้ายทั้งโฟลเดอร์ได้เลย`;
+        `(เสียง ${packed.audio_name} ${mb} MB + ไฟล์งาน${withScript}) — ย้ายทั้งโฟลเดอร์ได้เลย`;
     } catch (err) {
       fileName.textContent = `รวมโปรเจกต์ไม่สำเร็จ: ${String(err)}`;
     } finally {
@@ -1589,9 +1607,13 @@ function setup(): void {
     transcriptEl.textContent = "กำลังนำบทเข้า…";
     try {
       const jobId = await startAlignScript(audioPath, scriptPath);
-      trackJob(jobId, alignScriptBtn, "ตรึงบท (มีบทแล้ว)", "ตรึงบท", transcriptEl, (r) =>
-        adoptResult(gen, audioPath, r as TranscribeResult),
-      );
+      trackJob(jobId, alignScriptBtn, "ตรึงบท (มีบทแล้ว)", "ตรึงบท", transcriptEl, (r) => {
+        adoptResult(gen, audioPath, r as TranscribeResult);
+        // Remember which document this came from. The editor's last step is
+        // writing corrections back into that same formatted file, and packing
+        // now carries it along so they actually have it.
+        if (project) project.scriptPath = scriptPath;
+      });
     } catch (err) {
       transcriptEl.textContent = `ตรึงบทไม่สำเร็จ: ${String(err)}`;
       refreshButtons();
@@ -1850,6 +1872,9 @@ function setup(): void {
           multiple: false,
           directory: false,
           title: "เลือกไฟล์ Word ที่จะอัปเดต",
+          // Start on the document this project was aligned from — packing
+          // carries it into the folder, so it is almost always the answer.
+          defaultPath: proj.scriptPath ?? undefined,
           filters: [{ name: "Word", extensions: ["docx"] }],
         });
         if (typeof docPath !== "string") return;
@@ -2031,16 +2056,20 @@ function setup(): void {
         gpuInfo.title =
           "ถอดเสียงด้วยการ์ดจอ เร็วกว่าซีพียูราว 10 เท่า\n" +
           "ครั้งแรกหลังเปิดโปรแกรมจะช้ากว่าปกติ (เตรียมโค้ดให้เข้ากับการ์ด) — หลังจากนั้นเร็วตลอด";
+      } else if (gpu.devices > 0 && gpu.dlls_in_place) {
+        // The files arrived while the app was running. Saying "not enabled"
+        // here sent an editor hunting for files that were already in place,
+        // when a restart was the only thing left (reported 2026-08-26).
+        gpuInfo.textContent = "✅ ไฟล์พร้อมแล้ว — ปิดเปิดโปรแกรมเพื่อเริ่มใช้การ์ดจอ";
+        gpuInfo.className = "gpu-info gpu-ready";
+        gpuInfo.title = "ไฟล์อยู่ครบแล้ว แต่โปรแกรมตรวจหาการ์ดจอแค่ตอนเปิด — ปิดแล้วเปิดใหม่";
       } else if (gpu.devices > 0 && !gpu.libraries_found) {
-        // The actionable case: the hardware is there, the add-on is not.
-        gpuInfo.textContent = "🖥️ มีการ์ดจอ แต่ยังไม่ได้เปิดใช้";
+        // The hardware is there, the add-on is not. The instructions used to
+        // live in a hover tooltip on something that looked clickable, so an
+        // editor pressed it, nothing happened, and the advice was never seen.
+        gpuInfo.textContent = "🖥️ มีการ์ดจอ แต่ยังไม่ได้เปิดใช้ (กดดูวิธี)";
         gpuInfo.className = "gpu-info gpu-off";
-        gpuInfo.title =
-          `พบการ์ดจอ NVIDIA ${gpu.devices} ตัว แต่ยังไม่มีไฟล์เสริม\n\n` +
-          `ก๊อป ${gpu.required_dlls.join(" และ ")}\n` +
-          `ไปไว้ในโฟลเดอร์ชื่อ cuda ที่นี่:\n${status.dataDir}\n\n` +
-          "(สร้างโฟลเดอร์ cuda เองข้างๆ โฟลเดอร์ models) แล้วเปิดโปรแกรมใหม่\n" +
-          "→ ถอดเสียงเร็วขึ้นราว 10 เท่า";
+        gpuInfo.title = "กดเพื่อดูวิธีเปิดใช้ — โปรแกรมค้นหาไฟล์ในเครื่องให้ได้";
       } else {
         gpuInfo.hidden = true; // no NVIDIA card: nothing useful to say
       }
@@ -2054,6 +2083,131 @@ function setup(): void {
     }
     refreshButtons();
   };
+
+  // --- GPU add-on panel -------------------------------------------------
+  //
+  // This used to be a plain label whose instructions lived in a hover
+  // tooltip. It looked clickable, so an editor clicked it, nothing happened,
+  // and the advice — "find these two DLLs and copy them here" — was never
+  // read (reported 2026-08-26). Even read, it was not advice anyone could
+  // act on: the add-on was never shipped, because bundling it took the
+  // installer to 3.05GB against a 2GB ceiling.
+  //
+  // So the panel now does the finding itself. Machines with an NVIDIA card
+  // usually have these libraries somewhere already — a CUDA Toolkit install,
+  // or any PyTorch — and one button away is a very different thing from a
+  // filename in a tooltip.
+  const gpuDialog = el<HTMLDialogElement>("#gpu-dialog");
+  const gpuDialogTitle = el<HTMLElement>("#gpu-dialog-title");
+  const gpuDialogBody = el<HTMLElement>("#gpu-dialog-body");
+  const gpuInstallBtn = el<HTMLButtonElement>("#gpu-install-btn");
+  const gpuPickBtn = el<HTMLButtonElement>("#gpu-pick-btn");
+  const gpuFolderBtn = el<HTMLButtonElement>("#gpu-folder-btn");
+  let gpuTargetDir = "";
+
+  const gpuSay = (html: string) => {
+    gpuDialogBody.innerHTML = html;
+  };
+
+  const afterInstall = (dir: string) => {
+    gpuInstallBtn.hidden = true;
+    gpuPickBtn.hidden = true;
+    gpuSay(
+      `<p class="loudness-verdict ok">✅ ติดตั้งไฟล์เรียบร้อยแล้ว</p>` +
+        `<p>ไฟล์อยู่ที่ <code>${dir}</code></p>` +
+        `<p><b>เหลืออีกขั้นเดียว: ปิดโปรแกรมแล้วเปิดใหม่</b><br>` +
+        `โปรแกรมตรวจหาการ์ดจอแค่ตอนเปิด จึงต้องเริ่มใหม่ถึงจะเห็น</p>` +
+        `<p>หลังจากนั้นป้ายจะเปลี่ยนเป็น ⚡ ใช้การ์ดจอ และถอดเสียงเร็วขึ้นราว 10 เท่า</p>`,
+    );
+    void checkModels();
+  };
+
+  const installFrom = async (source?: string) => {
+    gpuInstallBtn.disabled = true;
+    gpuPickBtn.disabled = true;
+    try {
+      const done = await installCuda(source);
+      afterInstall(done.dir);
+    } catch (err) {
+      gpuSay(`<p class="loudness-warn">ติดตั้งไม่สำเร็จ: ${String(err)}</p>`);
+    } finally {
+      gpuInstallBtn.disabled = false;
+      gpuPickBtn.disabled = false;
+    }
+  };
+
+  const openGpuDialog = async () => {
+    const status = await modelsStatus();
+    const gpu = status?.gpu;
+    gpuTargetDir = status ? `${status.dataDir}` : "";
+    gpuInstallBtn.hidden = true;
+    gpuPickBtn.hidden = false;
+    gpuDialog.showModal();
+
+    if (gpu?.device === "cuda") {
+      gpuDialogTitle.textContent = "⚡ ใช้การ์ดจอแล้ว";
+      gpuPickBtn.hidden = true;
+      gpuSay(
+        `<p>โปรแกรมกำลังถอดเสียงด้วยการ์ดจอ เร็วกว่าซีพียูราว 10 เท่า</p>` +
+          `<p>ไฟล์อยู่ที่ <code>${gpu.libraries_dir ?? ""}</code></p>`,
+      );
+      return;
+    }
+    if (gpu && gpu.dlls_in_place) {
+      gpuDialogTitle.textContent = "✅ ไฟล์พร้อมแล้ว";
+      gpuPickBtn.hidden = true;
+      gpuSay(
+        `<p><b>เหลืออีกขั้นเดียว: ปิดโปรแกรมแล้วเปิดใหม่</b></p>` +
+          `<p>ไฟล์อยู่ครบแล้ว แต่โปรแกรมตรวจหาการ์ดจอแค่ตอนเปิด ` +
+          `จึงยังใช้ไม่ได้จนกว่าจะเริ่มใหม่</p>`,
+      );
+      return;
+    }
+
+    gpuDialogTitle.textContent = "🖥️ เปิดใช้การ์ดจอ";
+    const needed = gpu?.required_dlls.join(" และ ") ?? "";
+    gpuSay(
+      `<p>เครื่องนี้มีการ์ดจอ NVIDIA ${gpu?.devices ?? 0} ตัว แต่ยังไม่มีไฟล์ที่ใช้ขับ</p>` +
+        `<p>ต้องมี <code>${needed}</code> อยู่ในโฟลเดอร์ <code>cuda</code> ที่นี่:<br>` +
+        `<code>${gpuTargetDir}</code></p>` +
+        `<p>กำลังค้นหาไฟล์ในเครื่อง…</p>`,
+    );
+    try {
+      const found = await findCuda();
+      if (found.found) {
+        gpuInstallBtn.hidden = false;
+        gpuSay(
+          `<p class="loudness-verdict ok">พบไฟล์ในเครื่องนี้แล้ว</p>` +
+            `<p><code>${found.found}</code></p>` +
+            `<p>กด <b>ค้นหาไฟล์ในเครื่องแล้วติดตั้งให้</b> ด้านล่าง ` +
+            `โปรแกรมจะคัดลอกไปไว้ที่ <code>${found.target ?? gpuTargetDir}</code> ให้เอง</p>` +
+            `<p>คัดลอกไม่ใช่ชี้ไปที่ไฟล์เดิม เพราะไฟล์ต้นทางมักอยู่ในโปรแกรมอื่น ` +
+            `ซึ่งอาจถูกลบตอนอัปเดตแล้วการ์ดจอจะหยุดทำงานโดยไม่มีสาเหตุให้เห็น</p>`,
+        );
+      } else {
+        gpuSay(
+          `<p>ไม่พบไฟล์ในเครื่องนี้</p>` +
+            `<p>ถ้ามีเครื่องอื่นที่เปิดใช้การ์ดจอได้แล้ว ก๊อปโฟลเดอร์ <code>cuda</code> ` +
+            `ทั้งโฟลเดอร์ (ราว 750 MB) มาวางที่:<br><code>${gpuTargetDir}</code></p>` +
+            `<p>หรือถ้ารู้ว่าไฟล์อยู่ที่ไหน กด <b>เลือกโฟลเดอร์ที่มีไฟล์เอง</b></p>` +
+            `<p>ไฟล์นี้มาจาก CUDA Toolkit 12 ของ NVIDIA หรือเครื่องที่ลง PyTorch แบบ CUDA ไว้</p>`,
+        );
+      }
+    } catch (err) {
+      gpuSay(`<p class="loudness-warn">ค้นหาไม่สำเร็จ: ${String(err)}</p>`);
+    }
+  };
+
+  gpuInfo.addEventListener("click", () => void openGpuDialog());
+  gpuInstallBtn.addEventListener("click", () => void installFrom());
+  gpuPickBtn.addEventListener("click", async () => {
+    const dir = await open({ directory: true, multiple: false, title: "โฟลเดอร์ที่มีไฟล์ CUDA" });
+    if (typeof dir === "string") void installFrom(dir);
+  });
+  gpuFolderBtn.addEventListener("click", () => {
+    if (gpuTargetDir) void revealItemInDir(gpuTargetDir);
+  });
+  el<HTMLButtonElement>("#gpu-close-btn").addEventListener("click", () => gpuDialog.close());
 
   deleteModelsBtn.addEventListener("click", async () => {
     const status = await modelsStatus();

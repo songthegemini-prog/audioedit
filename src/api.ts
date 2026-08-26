@@ -122,6 +122,9 @@ export interface GpuStatus {
    * falls back. */
   available: boolean;
   libraries_found: boolean;
+  /** Re-checked on every call, unlike libraries_found which is fixed at
+   * startup — true here with libraries_found false means "restart". */
+  dlls_in_place: boolean;
   libraries_dir: string | null;
   devices: number;
   required_dlls: string[];
@@ -272,16 +275,23 @@ export interface PackedProject {
   audio_name: string;
   audio_path: string;
   bytes: number;
+  /** Filename of the script copied in, or null when there was none to carry. */
+  script_name: string | null;
 }
 
 /** Copy the source audio into a self-contained project folder. The caller
  * then writes the .json beside it with a BARE FILENAME as audioPath — that
  * is what lets the folder open on any machine. */
-export async function packProject(audioPath: string, outDir: string): Promise<PackedProject> {
+export async function packProject(
+  audioPath: string,
+  outDir: string,
+  /** The formatted script to carry along, so the editor can write back to it. */
+  scriptPath?: string | null,
+): Promise<PackedProject> {
   const res = await fetch(`${apiBase()}/pack_project`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audio_path: audioPath, out_dir: outDir }),
+    body: JSON.stringify({ audio_path: audioPath, out_dir: outDir, script_path: scriptPath }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail;
@@ -341,6 +351,34 @@ export async function updateDocx(
     throw new Error(detail ?? `HTTP ${res.status}`);
   }
   return (await res.json()) as UpdateDocxResult;
+}
+
+export interface CudaFindResult {
+  /** A folder on this machine that already holds both libraries. */
+  found: string | null;
+  /** Where they need to end up. */
+  target?: string;
+  error?: string;
+}
+
+export async function findCuda(): Promise<CudaFindResult> {
+  const res = await fetch(`${apiBase()}/cuda/find`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as CudaFindResult;
+}
+
+/** Copy the CUDA libraries into the add-on folder beside models/. */
+export async function installCuda(source?: string): Promise<{ dir: string; copied: string[] }> {
+  const res = await fetch(`${apiBase()}/cuda/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: source ?? null }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return await res.json();
 }
 
 export async function cancelJob(jobId: string): Promise<void> {

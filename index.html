@@ -204,6 +204,17 @@
         </label>
       </dialog>
 
+      <dialog id="gpu-dialog" class="loudness-dialog">
+        <h2 id="gpu-dialog-title">การ์ดจอ</h2>
+        <div id="gpu-dialog-body"></div>
+        <div class="export-dialog-buttons">
+          <button id="gpu-install-btn" hidden>ค้นหาไฟล์ในเครื่องแล้วติดตั้งให้</button>
+          <button id="gpu-pick-btn">เลือกโฟลเดอร์ที่มีไฟล์เอง</button>
+          <button id="gpu-folder-btn">เปิดโฟลเดอร์ปลายทาง</button>
+          <button id="gpu-close-btn" value="close">ปิด</button>
+        </div>
+      </dialog>
+
       <dialog id="loudness-dialog" class="loudness-dialog">
         <h2 id="loudness-verdict" class="loudness-verdict"></h2>
         <div id="loudness-body"></div>
@@ -235,7 +246,7 @@
           <span class="dot"></span>
           <span id="backend-status-text">กำลังตรวจสอบ backend…</span>
         </span>
-        <span id="gpu-info" class="gpu-info" hidden></span>
+        <button id="gpu-info" class="gpu-info" hidden></button>
         <span id="models-info" class="models-info" hidden>
           <span id="models-info-text"></span>
           <button id="delete-models-btn" title="ลบโมเดล AI ออกจากเครื่องเพื่อคืนพื้นที่ — ถอดเสียง/ตรึงบทจะใช้ไม่ได้จนกว่าจะติดตั้งใหม่">ลบโมเดล</button>
