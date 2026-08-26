@@ -12,7 +12,12 @@ from .asr import FasterWhisperEngine
 from .jobs import JobStore
 from .tokens import segment_words
 
-APP_VERSION = "1.4.5"
+# Must match package.json / tauri.conf.json — the status line shows THIS
+# number, and it had silently drifted three releases behind by the time an
+# editor noticed the app calling itself v1.4.5 (2026-08-25). A test now
+# fails the build if it does not match, because a version that lies is
+# worse than no version: it makes every bug report point at the wrong code.
+APP_VERSION = "1.4.8"
 
 # Only the Tauri webview may talk to this backend — it must never be
 # reachable from anywhere outside the local app.
