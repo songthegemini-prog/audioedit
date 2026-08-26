@@ -698,6 +698,11 @@ function setup(): void {
     } else if (selectionBounds) {
       player.setScope({ ...selectionBounds });
     } else {
+      // There is nothing to fence off yet. The button greys out to show this,
+      // but Ctrl+L had no way to say so and simply did nothing — leaving the
+      // editor to wonder whether the shortcut works at all (asked 2026-08-26).
+      fileName.textContent =
+        "กั้นช่วงฟัง (Ctrl+L): ต้องลากเลือกช่วงบนคลื่นเสียง หรือเลือกคำในบทก่อน";
       return;
     }
     refreshScopeUi();
