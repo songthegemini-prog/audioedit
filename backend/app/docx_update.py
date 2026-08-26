@@ -26,6 +26,7 @@ Two rules earn their keep, both learned the hard way on this file:
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -42,6 +43,14 @@ _PAIR_RATIO = 0.5
 # Two paragraphs whose lengths differ by more than this are not an edit of one
 # another, whatever their characters happen to share.
 _LENGTH_RATIO = 0.4
+# How much of the script the document must actually account for before this is
+# treated as the same programme at all. One paragraph in common is not enough:
+# programmes share stock openings and closings, so picking the wrong episode
+# gave a single exact anchor, a "match", and then the whole of a different
+# episode inserted after it (raised in review 2026-08-26). Measured on the
+# team's own file a genuine pairing covers ~100% of the script, so half is
+# generous — it still admits a document whose second half was rewritten.
+_MIN_COVERAGE = 0.5
 
 
 def similarity(a: str, b: str) -> float:
@@ -309,6 +318,24 @@ def pair_up(doc_texts: list[str], lines: list[str]) -> list[tuple[int | None, in
     return pairs
 
 
+def coverage(
+    pairs: list[tuple[int | None, int | None]],
+    doc_texts: list[str],
+    lines: list[str],
+) -> float:
+    """Fraction of the script's characters that found a home in the document.
+
+    Counting CHARACTERS, not paragraphs, is the point: one short shared line
+    out of a hundred is a coincidence, and paragraph counting cannot tell that
+    from a real match the way length can.
+    """
+    total = sum(len(line) for line in lines)
+    if total == 0:
+        return 0.0
+    matched = sum(len(lines[j]) for i, j in pairs if i is not None and j is not None)
+    return matched / total
+
+
 def content_bounds(pairs: list[tuple[int | None, int | None]]) -> tuple[int, int] | None:
     """The paragraph range the script actually occupies.
 
@@ -320,6 +347,33 @@ def content_bounds(pairs: list[tuple[int | None, int | None]]) -> tuple[int, int
     if not matched:
         return None
     return min(matched), max(matched)
+
+
+def save_atomically(doc, out_path: Path) -> None:
+    """Write the document without ever leaving the destination half-written.
+
+    out_path is very often the team's own master file — the dialog offers
+    "save over the original" on purpose — and python-docx writes a ZIP in
+    place. A crash, a full disk or an antivirus lock partway through would
+    leave them with a .docx Word cannot open and no copy to fall back on.
+    The audio export already writes to .part and renames; this had not caught
+    up (raised in review 2026-08-26).
+
+    The temporary file is a sibling so the rename stays on one filesystem,
+    where it is atomic. And it is opened again before the rename: a file that
+    saved without raising can still be unopenable, and finding that out after
+    replacing the original is exactly too late.
+    """
+    from docx import Document  # python-docx
+
+    tmp = out_path.with_name(out_path.name + f".{os.getpid()}.part")
+    try:
+        doc.save(str(tmp))
+        Document(str(tmp))  # raises if what we just wrote is not a document
+        os.replace(tmp, out_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def update_docx(doc_path: Path, out_path: Path, lines: list[str]) -> dict:
@@ -334,13 +388,14 @@ def update_docx(doc_path: Path, out_path: Path, lines: list[str]) -> dict:
 
     pairs = pair_up(doc_texts, lines)
     bounds = content_bounds(pairs)
+    covered = coverage(pairs, doc_texts, lines)
     changes: list[Change] = []
     untouched = len(doc_texts)
 
-    if bounds is None:
+    if bounds is None or covered < _MIN_COVERAGE:
         # Nothing recognisable. Saving an unchanged copy is the honest result;
         # rewriting on a guess would destroy the document.
-        doc.save(str(out_path))
+        save_atomically(doc, out_path)
         return {
             "out_path": str(out_path),
             "edited": 0,
@@ -348,6 +403,7 @@ def update_docx(doc_path: Path, out_path: Path, lines: list[str]) -> dict:
             "removed": 0,
             "untouched": untouched,
             "matched": False,
+            "coverage": covered,
             "changes": [],
         }
 
@@ -390,7 +446,7 @@ def update_docx(doc_path: Path, out_path: Path, lines: list[str]) -> dict:
     for par in to_remove:
         par._p.getparent().remove(par._p)
 
-    doc.save(str(out_path))
+    save_atomically(doc, out_path)
     return {
         "out_path": str(out_path),
         "edited": edited,
@@ -398,5 +454,6 @@ def update_docx(doc_path: Path, out_path: Path, lines: list[str]) -> dict:
         "removed": removed,
         "untouched": untouched - edited - removed,
         "matched": True,
+        "coverage": covered,
         "changes": [c.to_dict() for c in changes],
     }

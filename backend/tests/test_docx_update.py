@@ -226,3 +226,98 @@ def test_set_paragraph_text_reports_whether_it_changed_anything(tmp_path: Path) 
     par = [p for p in _read(src) if p.text.strip()][3]
     assert set_paragraph_text(par, par.text) is False
     assert set_paragraph_text(par, par.text + "ต่อท้าย") is True
+
+
+# --- refusing the wrong document -------------------------------------------
+
+
+def test_one_shared_line_is_not_a_match(tmp_path: Path) -> None:
+    """Raised in review 2026-08-26, and it reproduced exactly.
+
+    Programmes share stock openings and closings, so the wrong episode can
+    still produce one exact anchor. That was enough to count as a match, and
+    the whole of a different episode was then inserted after it — into the
+    team's formatted master, over the top of their work.
+    """
+    src, out = tmp_path / "in.docx", tmp_path / "out.docx"
+    doc = docx.Document()
+    doc.add_paragraph("ขอบคุณที่ติดตาม")  # the one line both happen to share
+    doc.save(str(src))
+
+    res = update_docx(
+        src,
+        out,
+        ["ขอบคุณที่ติดตาม", "นี่คือเนื้อหาของรายการคนละตอนทั้งหมด"],
+    )
+
+    assert res["matched"] is False
+    assert (res["edited"], res["added"], res["removed"]) == (0, 0, 0)
+    assert [p.text for p in _read(out) if p.text.strip()] == ["ขอบคุณที่ติดตาม"]
+
+
+def test_the_right_document_still_matches_after_heavy_editing(tmp_path: Path) -> None:
+    """The guard must not lock out real work. Half the script rewritten is
+    still the same programme, and must still be accepted."""
+    src, out = tmp_path / "in.docx", tmp_path / "out.docx"
+    _build(src)
+    lines = [p.text for p in _read(src) if p.text.strip()][2:]
+    lines[1] = "เขียนใหม่ทั้งย่อหน้าแบบไม่เหลือเค้าเดิมสักคำเดียวเลยจริง ๆ นะ"
+
+    res = update_docx(src, out, lines)
+
+    assert res["matched"] is True
+    assert res["coverage"] >= 0.5
+
+
+# --- never leaving the team's master half-written --------------------------
+
+
+def test_a_failed_save_leaves_the_original_untouched(tmp_path: Path, monkeypatch) -> None:
+    """out_path is very often the team's own file — the dialog offers saving
+    over it. python-docx writes a ZIP in place, so a crash partway through
+    would leave them a document Word cannot open and no copy to fall back on.
+    """
+    src = tmp_path / "master.docx"
+    _build(src)
+    before = src.read_bytes()
+    lines = [p.text for p in _read(src) if p.text.strip()][2:]
+    lines[0] = lines[0] + "แก้ไข"
+
+    from app import docx_update
+
+    def explode(self, path):  # save() dies partway, as a full disk would
+        Path(path).write_bytes(b"half a zip")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(docx.document.Document, "save", explode)
+
+    with pytest.raises(OSError):
+        docx_update.update_docx(src, src, lines)  # saving OVER the original
+
+    assert src.read_bytes() == before  # untouched, byte for byte
+    assert list(tmp_path.glob("*.part")) == []  # and no debris left behind
+
+
+def test_a_document_that_saves_but_cannot_be_reopened_is_not_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Saving without raising is not proof the file is readable, and finding
+    that out after replacing the original is exactly too late."""
+    src = tmp_path / "master.docx"
+    _build(src)
+    before = src.read_bytes()
+    lines = [p.text for p in _read(src) if p.text.strip()][2:]
+    lines[0] = lines[0] + "แก้ไข"
+
+    from app import docx_update
+
+    def writes_rubbish(self, path):
+        Path(path).write_bytes(b"not a docx at all")
+
+    monkeypatch.setattr(docx.document.Document, "save", writes_rubbish)
+
+    with pytest.raises(Exception):
+        docx_update.update_docx(src, src, lines)
+
+    assert src.read_bytes() == before
+    assert list(tmp_path.glob("*.part")) == []

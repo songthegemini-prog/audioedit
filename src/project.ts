@@ -130,6 +130,9 @@ export class Project {
   updateCutBounds(index: number, start: number, end: number): void {
     const cut = this.edlList[index];
     if (!cut) return;
+    // A drag that ended where it started is not an edit. Pushing for it left
+    // an undo step that restores the state it is already in.
+    if (cut.start === start && cut.end === end) return;
     this.pushHistory();
     // Recompute which tokens this cut covers from the NEW bounds — otherwise a
     // resized cut keeps its old tokenRange and .docx would still omit words
@@ -248,7 +251,43 @@ export class Project {
       run();
     } finally {
       this.batching = false;
+      // Pressing "ซ่อน filler" twice changes nothing the second time, but the
+      // step was pushed anyway — so the first Ctrl+Z restored a state
+      // identical to the current one and undo looked broken (raised in review
+      // 2026-08-26). An undo step that undoes nothing is worse than no step.
+      const pushed = this.undoStack[this.undoStack.length - 1];
+      if (pushed && this.matchesCurrentState(pushed)) this.undoStack.pop();
     }
+  }
+
+  /** Does this snapshot describe exactly the state we are in now? */
+  private matchesCurrentState(state: HistoryState): boolean {
+    // A snapshot carrying tokens came from แก้ทั้งวรรค, which always changed
+    // something structural — never second-guess it.
+    if (state.tokens || state.segments) return false;
+    if (state.edl.length !== this.edlList.length) return false;
+    for (let i = 0; i < state.edl.length; i++) {
+      const was = state.edl[i];
+      const now = this.edlList[i];
+      if (was.start !== now.start || was.end !== now.end) return false;
+      const a = was.tokenRange;
+      const b = now.tokenRange;
+      if ((a === null) !== (b === null)) return false;
+      if (a && b && (a[0] !== b[0] || a[1] !== b[1])) return false;
+    }
+    if (state.edits.size !== this.edits.size) return false;
+    for (const [i, was] of state.edits) {
+      const now = this.edits.get(i);
+      if (
+        !now ||
+        was.editedText !== now.editedText ||
+        was.excludeFromDoc !== now.excludeFromDoc ||
+        was.keepInDoc !== now.keepInDoc
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** Text to display/export for token i: the human's fix, else ASR text. */
@@ -301,7 +340,6 @@ export class Project {
 
   /** Set the corrected spelling. Empty text or the original text clears the fix. */
   setEditedText(i: number, text: string): void {
-    this.pushHistory();
     const edit = { ...this.edits.get(i) };
     const trimmed = text.trim();
     if (trimmed === "" || trimmed === this.transcription.tokens[i].text) {
@@ -309,6 +347,10 @@ export class Project {
     } else {
       edit.editedText = trimmed;
     }
+    // Opening the editor and pressing Enter without typing is not an edit.
+    // Working out the result BEFORE pushing is the only way to know that.
+    if (edit.editedText === this.edits.get(i)?.editedText) return;
+    this.pushHistory();
     this.storeEdit(i, edit);
   }
 
@@ -418,9 +460,14 @@ export class Project {
   isTokenRemoved(i: number): boolean {
     if (this.isTokenCut(i)) return true;
     const t = this.transcription.tokens[i];
-    return this.edlList.some(
-      (c) => t.start >= c.start - 0.005 && t.end <= c.end + 0.005,
-    );
+    // The SAME midpoint rule tokensInSpan uses. It used to require the cut to
+    // swallow the word whole, so a cut taking most of a word — 0.4s to 1.0s of
+    // a word spanning 0.0 to 1.0 — left that word in the .docx with its audio
+    // gone (raised in review 2026-08-26). Two rules for "is this word cut"
+    // means the document and the audio can disagree, which is the one thing
+    // this map exists to prevent.
+    const mid = (t.start + t.end) / 2;
+    return this.edlList.some((c) => mid >= c.start - 0.005 && mid <= c.end + 0.005);
   }
 
   /** CLAUDE.md export rule: editedText where present; excluded and cut tokens

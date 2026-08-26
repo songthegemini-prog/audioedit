@@ -488,6 +488,26 @@ export class AudioPlayer {
     return true;
   }
 
+  /** Start playback, reporting a refusal instead of dropping it.
+   *
+   * Every way into playback goes through here. playPause was fixed on its own
+   * first, which left listening to a selection, tabbing through words,
+   * clicking a marker and Ctrl+K still failing in silence against a broken
+   * media element — the same defect in four more places (raised in review
+   * 2026-08-26). One door means one place to get it right.
+   */
+  private start(): void {
+    const problem = this.playbackProblem();
+    if (problem) {
+      this.events.onPlaybackProblem?.(problem);
+      return;
+    }
+    if (this.ws.isPlaying()) return;
+    void this.ws.play().catch((err: unknown) => {
+      this.events.onPlaybackProblem?.(this.playbackProblem() ?? String(err));
+    });
+  }
+
   playPause(): void {
     if (!this.loaded) {
       this.events.onPlaybackProblem?.("ยังไม่ได้โหลดไฟล์เสียง");
@@ -579,7 +599,7 @@ export class AudioPlayer {
     this.rangeEnd = null;
     this.previewSkip = null;
     this.seekTo(seconds);
-    if (!this.ws.isPlaying()) void this.ws.play();
+    this.start();
   }
 
   /** Play [start, end] then pause ("ฟังช่วงที่เลือก"). */
@@ -588,7 +608,7 @@ export class AudioPlayer {
     this.ensureAudioRunning();
     this.seekTo(start); // clears any stale rangeEnd — set ours after
     this.rangeEnd = end;
-    if (!this.ws.isPlaying()) void this.ws.play();
+    this.start();
   }
 
   /** Test-cut mode: playback skips these regions. Pass null to hear the original. */
@@ -620,7 +640,7 @@ export class AudioPlayer {
     }
     this.previewSkip = { start, end };
     this.rangeEnd = Math.min(this.duration, end + postRoll);
-    if (!this.ws.isPlaying()) void this.ws.play();
+    this.start();
   }
 
   /** The regions plugin appends a drag-created region's element to the DOM at

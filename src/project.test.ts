@@ -935,3 +935,56 @@ describe("the script document a project came from", () => {
     expect(Project.parse(JSON.stringify(saved)).scriptPath).toBeNull();
   });
 });
+
+describe("what counts as an undo step", () => {
+  it("does not record a bulk action that changed nothing", () => {
+    // Pressing "ซ่อน filler" twice pushed a step the second time, so the
+    // first Ctrl+Z restored the state it was already in and undo looked
+    // broken (raised in review 2026-08-26).
+    const p = new Project("/a.wav", makeTranscription());
+    expect(p.excludeAllFillers()).toBe(1);
+    expect(p.excludeAllFillers()).toBe(0); // nothing left to hide
+
+    expect(p.undo()).toBe(true);
+    expect(p.isExcluded(1)).toBe(false); // the FIRST undo brings it back
+  });
+
+  it("does not record retyping a word as the word it already was", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.setEditedText(0, "สวัสดีครับ");
+    p.setEditedText(0, "สวัสดีครับ"); // opened the editor, typed nothing
+
+    expect(p.undo()).toBe(true);
+    expect(p.effectiveText(0)).toBe("สวัสดี"); // straight back to the original
+  });
+
+  it("does not record a cut edge dragged back to where it was", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 0.2, end: 0.8, tokenRange: null });
+    p.updateCutBounds(0, 0.2, 0.8); // dragged and released in place
+
+    expect(p.undo()).toBe(true);
+    expect(p.edl.length).toBe(0); // the cut itself, not a phantom step
+  });
+});
+
+describe("a cut that takes most of a word", () => {
+  it("removes it from the document, the same as a token-range cut would", () => {
+    // tokensInSpan uses the midpoint; isTokenRemoved demanded the cut swallow
+    // the word whole. So a cut over 0.4–1.0 of a word spanning 0.0–1.0 left
+    // that word in the .docx with its audio gone (raised in review
+    // 2026-08-26). The document and the audio must tell one story.
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 0.4, end: 1.0, tokenRange: null }); // waveform-only cut
+
+    expect(p.isTokenRemoved(0)).toBe(true); // token 0 is 0.0–1.0
+    expect(p.exportLines().join("")).not.toContain("สวัสดี");
+  });
+
+  it("leaves a word the cut barely clips", () => {
+    const p = new Project("/a.wav", makeTranscription());
+    p.addCut({ start: 0.9, end: 1.0, tokenRange: null }); // only the tail
+
+    expect(p.isTokenRemoved(0)).toBe(false);
+  });
+});

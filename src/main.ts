@@ -782,7 +782,14 @@ function setup(): void {
   const refreshButtons = () => {
     // ASR/alignment need the models; everything else works without them
     const audioReady = Boolean(currentPath) && player.isLoaded && backendUp;
-    transcribeBtn.disabled = !(audioReady && modelsReady);
+    // One long job at a time. Both write their result into the same project
+    // through the same generation guard, so starting a second while the first
+    // runs let whichever finished LAST silently overwrite the other — losing
+    // either the transcript or the aligned script with no message at all. The
+    // cancel button could only ever reach the newer one, too (raised in
+    // review 2026-08-26).
+    const jobRunning = activeJobId !== null;
+    transcribeBtn.disabled = !(audioReady && modelsReady) || jobRunning;
     // "ตรึงบท (มีบทแล้ว)" force-aligns a script the editor already has and
     // never runs ASR, so it has no business demanding the 2.9GB ASR model —
     // requiring it made a machine that only ever aligns download it for
@@ -793,12 +800,12 @@ function setup(): void {
     // models — the machine that has them makes the transcript and hands the
     // project on (2026-08-25). Without the model the words still arrive, at
     // estimated times; the button warns first and the note says so after.
-    alignScriptBtn.disabled = !audioReady;
+    alignScriptBtn.disabled = !audioReady || jobRunning;
     const hasProject = project !== null;
     // Markers only need a loaded file — they work before transcription, and
     // without the backend (they are pure project data).
     markerBtn.disabled = !hasProject || !player.isLoaded;
-    exportBtn.disabled = !hasProject || !backendUp;
+    exportBtn.disabled = !hasProject || !backendUp || jobRunning;
     // Measuring reads the source through the EDL, so it is useful before any
     // export exists — but it still needs the backend to decode the audio.
     el<HTMLButtonElement>("#measure-btn").disabled = !hasProject || !backendUp;
@@ -1446,12 +1453,17 @@ function setup(): void {
   );
 
   // --- transcription + script alignment (share one job-tracking path) ---
-  const adoptResult = (gen: number, audioPath: string, result: TranscribeResult) => {
+  /** Returns whether the result was taken — a stale job's is not. */
+  const adoptResult = (
+    gen: number,
+    audioPath: string,
+    result: TranscribeResult,
+  ): boolean => {
     // A transcription/align job that finishes AFTER the user opened another
     // file or hit งานใหม่ must not land on the current project. Compare the
     // load generation captured when the job started, not just the path — that
     // also rejects the A→other→A reopen case (Codex re-review #2).
-    if (gen !== loadGeneration || currentPath !== audioPath) return;
+    if (gen !== loadGeneration || currentPath !== audioPath) return false;
     // carry rough pre-transcription cuts (as pure time cuts) forward
     const carriedCuts = project && project.audioPath === audioPath ? [...project.edl] : [];
     project = new Project(audioPath, result);
@@ -1467,6 +1479,7 @@ function setup(): void {
     updateReviewCount();
     project.dirty = true; // fresh result not saved yet
     updateDirty();
+    return true;
   };
 
   let activeJobId: string | null = null;
@@ -1570,9 +1583,9 @@ function setup(): void {
     transcriptEl.textContent = "กำลังส่งงานถอดเสียง…";
     try {
       const jobId = await startTranscribe(audioPath);
-      trackJob(jobId, transcribeBtn, "ถอดเสียง (ฉบับร่าง)", "ถอดเสียง", transcriptEl, (r) =>
-        adoptResult(gen, audioPath, r as TranscribeResult),
-      );
+      trackJob(jobId, transcribeBtn, "ถอดเสียง (ฉบับร่าง)", "ถอดเสียง", transcriptEl, (r) => {
+        adoptResult(gen, audioPath, r as TranscribeResult);
+      });
     } catch (err) {
       transcriptEl.textContent = `ถอดเสียงไม่สำเร็จ: ${String(err)}`;
       refreshButtons();
@@ -1608,11 +1621,14 @@ function setup(): void {
     try {
       const jobId = await startAlignScript(audioPath, scriptPath);
       trackJob(jobId, alignScriptBtn, "ตรึงบท (มีบทแล้ว)", "ตรึงบท", transcriptEl, (r) => {
-        adoptResult(gen, audioPath, r as TranscribeResult);
-        // Remember which document this came from. The editor's last step is
-        // writing corrections back into that same formatted file, and packing
-        // now carries it along so they actually have it.
-        if (project) project.scriptPath = scriptPath;
+        // ONLY when the result was actually taken. A job finishing after the
+        // editor opened a different project used to write its script path
+        // onto that other project — which then offered the wrong document to
+        // pack, and to write corrections back into (raised in review
+        // 2026-08-26).
+        if (adoptResult(gen, audioPath, r as TranscribeResult) && project) {
+          project.scriptPath = scriptPath;
+        }
       });
     } catch (err) {
       transcriptEl.textContent = `ตรึงบทไม่สำเร็จ: ${String(err)}`;
